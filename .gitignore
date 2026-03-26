@@ -1,0 +1,19 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Data & large artifacts (keep structure, not files)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+outputs/models/*
+!outputs/models/.gitkeep
+outputs/embeddings/*
+!outputs/embeddings/.gitkeep
+outputs/figures/*
+!outputs/figures/.gitkeep

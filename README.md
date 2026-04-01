@@ -22,19 +22,25 @@ The system combines retrieval, clustering, and predictive modeling into a unifie
 
 - **Feature Engineering**
 
-    Business density, category diversity, demographics, text profiles, and persistence labels
+    Aggregated business density, category density per neighborhood, demographics (income, unemployment), foot traffic, text profiles, and persistence labels (`src/feature_engineering.py`)
 
 - **Clustering (From Scratch)**
 
-    K-means implemented in NumPy (`src/kmeans_numpy.py`)
+    K-means implemented in NumPy (`src/kmeans_numpy.py`) 
+
+- **Serialization**
+
+    Loading and saving models, embeddings, and data artifacts (`src/serialization.py`)
 
 - **Supervised Learning**
 
     Ridge / Random Forest models for persistence prediction (`src/persistence_model.py`)
+    Metrics and validation strategies for model evaluation 
 
 - **Ranking Engine**
 
     Combines similarity and predicted persistence (`src/ranking.py`)
+
 
 - **Dashboard**
 
@@ -96,12 +102,14 @@ K-means is implemented from scratch in `src/kmeans_numpy.py`:
 - Euclidean distance
 - Iterative centroid updates
 - Convergence via tolerance
+- Random initialization with multiple runs for stability
+- Elbow method for optimal cluster selection
 
 ---
 
 ## Modeling & Ranking
 
-- **Persistence score:** proportion of businesses active beyond a defined time threshold
+- **Persistence score:** proportion of businesses active beyond a defined time threshold 
 - **Models:** Ridge Regression, Random Forest
 
 Final ranking score:

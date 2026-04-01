@@ -26,6 +26,9 @@ def clean_acs(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize ACS tract/ZIP or neighborhood aggregates."""
     raise NotImplementedError
 
+def categorize_businesses(df: pd.DataFrame, license_df: pd.DataFrame) -> pd.DataFrame:
+    """Add categorical labels to business records based on license industry."""
+    raise NotImplementedError
 
 def merge_to_neighborhood_table(
     licenses: pd.DataFrame,

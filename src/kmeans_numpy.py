@@ -8,7 +8,9 @@ Do not delegate clustering to scikit-learn here.
 from __future__ import annotations
 
 import numpy as np
+from pathlib import Path
 
+CLUSTER_PATH = Path("outputs/clusters/")
 
 def pairwise_squared_euclidean(X: np.ndarray, C: np.ndarray) -> np.ndarray:
     """Squared Euclidean distances between rows of X (n, d) and rows of C (k, d) -> (n, k)."""
@@ -42,4 +44,12 @@ def assign_labels(X: np.ndarray, centroids: np.ndarray) -> np.ndarray:
 
 def update_centroids(X: np.ndarray, labels: np.ndarray, k: int) -> np.ndarray:
     """Recompute centroids as mean of assigned points; empty clusters need a policy (e.g. reinit)."""
+    raise NotImplementedError
+
+def save_kmeans_results(labels: np.ndarray, centroids: np.ndarray, path: str) -> None:
+    """Persist clustering results (e.g. with NumPy's save or joblib)."""
+    raise NotImplementedError
+
+def load_kmeans_results(path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load persisted clustering results."""
     raise NotImplementedError

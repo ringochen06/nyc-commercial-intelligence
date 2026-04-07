@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import serialization
 
 
 def load_or_fit_embedder(model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> Any:
@@ -38,3 +39,13 @@ def retrieve_top_k(
 ) -> list[tuple[str, float]]:
     """Return (neighborhood_id, similarity) pairs sorted descending."""
     raise NotImplementedError
+
+def save_embeddings(embeddings: np.ndarray, path: Path) -> None:
+    """Persist embeddings for reuse."""
+    serialization.save_numpy(embeddings, path)
+
+
+def load_embeddings(path: Path) -> np.ndarray:
+    """Load persisted embeddings."""
+    return serialization.load_numpy(path)
+    

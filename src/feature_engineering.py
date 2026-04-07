@@ -7,7 +7,9 @@ Placeholder for checkpoint — density, diversity, demographics, persistence sco
 from __future__ import annotations
 
 import pandas as pd
+from pathlib import Path
 
+FEATURES_PATH = Path("outputs/features/")
 
 def compute_business_density(licenses: pd.DataFrame, area_col: str) -> pd.Series:
     """Businesses per unit area or per neighborhood."""
@@ -35,4 +37,12 @@ def compute_persistence_labels(
 
 def build_feature_matrix(neighborhood_table: pd.DataFrame) -> pd.DataFrame:
     """Return numeric features used for clustering and persistence prediction."""
+    raise NotImplementedError
+
+def save_features(features: pd.DataFrame, path: str) -> None:
+    """Persist generated labels for supervised learning."""
+    raise NotImplementedError
+
+def load_features(path: str) -> pd.DataFrame:
+    """Load persisted features."""
     raise NotImplementedError

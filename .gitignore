@@ -17,3 +17,4 @@ outputs/embeddings/*
 !outputs/embeddings/.gitkeep
 outputs/figures/*
 !outputs/figures/.gitkeep
+claude.md

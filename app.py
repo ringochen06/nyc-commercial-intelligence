@@ -1,12 +1,38 @@
 """
-Streamlit entry: natural-language query, rankings, cluster and persistence visuals.
+NYC Commercial Intelligence — Streamlit dashboard.
 
-Run from repo root: ``streamlit run app.py``
+Hard constraints  : sidebar controls → DuckDB SQL filters (deterministic)
+Soft preferences  : free-text query  → Claude agentic tool-use on filtered data
+Semantic search   : OpenAI embeddings cosine similarity on neighborhood profiles
+
+Run:  streamlit run app.py
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+import duckdb
+import numpy as np
+import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Ensure src/ is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from agent import run_agent  # noqa: E402
+from embeddings import (  # noqa: E402
+    build_all_profiles,
+    cosine_similarity,
+    embed_neighborhood_features,
+    embed_texts,
+)
+
+# ── Page config ─────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="NYC Commercial Intelligence",
@@ -16,35 +42,294 @@ st.set_page_config(
 
 st.title("NYC Commercial Intelligence")
 st.caption(
-    "Explore NYC neighborhoods using licensing + demographics, semantic search, "
-    "K-means (NumPy), and persistence prediction."
+    "Rank NYC neighborhoods for commercial site selection using hard filters "
+    "(DuckDB SQL) and soft preferences (Claude agentic analysis + semantic search)."
 )
 
-st.sidebar.header("Query")
-query = st.sidebar.text_input(
-    "Describe the kind of area you want",
-    value="quiet residential area for boutique retail",
+# ── Load data ───────────────────────────────────────────────────────────────
+
+DATA_PATH = Path(__file__).resolve().parent / "data" / "processed" / "neighborhood_features_final.csv"
+
+
+@st.cache_data
+def load_data() -> pd.DataFrame:
+    return pd.read_csv(DATA_PATH)
+
+
+df_full = load_data()
+
+# ── Sidebar: Hard Filters ──────────────────────────────────────────────────
+
+st.sidebar.header("Hard Filters")
+st.sidebar.caption("Deterministic constraints applied via DuckDB SQL before the model sees the data.")
+
+# Borough
+boroughs = sorted(df_full["borough"].unique().tolist())
+selected_boroughs = st.sidebar.multiselect(
+    "Borough",
+    options=boroughs,
+    default=boroughs,
+    help="Select one or more boroughs to include.",
 )
 
-alpha = st.sidebar.slider("Weight: semantic similarity (α)", 0.0, 1.0, 0.5, 0.05)
-beta = 1.0 - alpha
-st.sidebar.caption(f"Persistence weight (β) = {beta:.2f}")
-
-st.info(
-    "Pipeline modules are under `src/`. After preprocessing and artifacts exist in "
-    "`outputs/`, wire `semantic_search`, `ranking`, and plots here for the full demo."
+# Subway station count
+subway_min, subway_max = int(df_full["subway_station_count"].min()), int(df_full["subway_station_count"].max())
+subway_range = st.sidebar.slider(
+    "Min subway stations",
+    min_value=subway_min,
+    max_value=subway_max,
+    value=subway_min,
+    help="Minimum number of subway stations in the neighborhood.",
 )
 
-st.subheader("Your query")
-st.write(query)
+# Average pedestrian traffic
+ped_min_val = int(df_full["avg_pedestrian"].min())
+ped_max_val = int(df_full["avg_pedestrian"].max())
+ped_threshold = st.sidebar.slider(
+    "Min avg pedestrian count",
+    min_value=ped_min_val,
+    max_value=ped_max_val,
+    value=ped_min_val,
+    help="Minimum average pedestrian foot traffic.",
+)
 
-st.subheader("Results (placeholder)")
+# POI density
+density_min = float(df_full["poi_density_per_km2"].min())
+density_max = float(df_full["poi_density_per_km2"].max())
+density_threshold = st.sidebar.slider(
+    "Min POI density (per km\u00b2)",
+    min_value=density_min,
+    max_value=density_max,
+    value=density_min,
+    step=0.5,
+    help="Minimum points-of-interest per square kilometer.",
+)
+
+# Total POI
+poi_min = int(df_full["total_poi"].min())
+poi_max = int(df_full["total_poi"].max())
+poi_threshold = st.sidebar.slider(
+    "Min total POI count",
+    min_value=poi_min,
+    max_value=poi_max,
+    value=poi_min,
+    help="Minimum total number of businesses/POIs.",
+)
+
+# Commercial activity score
+comm_min = float(df_full["commercial_activity_score"].min())
+comm_max = float(df_full["commercial_activity_score"].max())
+comm_threshold = st.sidebar.slider(
+    "Min commercial activity score",
+    min_value=comm_min,
+    max_value=comm_max,
+    value=comm_min,
+    step=1000.0,
+    help="Minimum commercial activity score (POI count x pedestrian traffic).",
+)
+
+# ── Apply hard filters with DuckDB ─────────────────────────────────────────
+
+def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """Build and execute a DuckDB SQL query from sidebar filter values."""
+    con = duckdb.connect()
+    con.register("nbhd", df)
+
+    borough_list = ", ".join(f"'{b}'" for b in selected_boroughs)
+    sql = f"""
+        SELECT *
+        FROM nbhd
+        WHERE borough IN ({borough_list})
+          AND subway_station_count >= {subway_range}
+          AND avg_pedestrian >= {ped_threshold}
+          AND poi_density_per_km2 >= {density_threshold}
+          AND total_poi >= {poi_threshold}
+          AND commercial_activity_score >= {comm_threshold}
+        ORDER BY commercial_activity_score DESC
+    """
+
+    result = con.execute(sql).fetchdf()
+    con.close()
+    return result
+
+
+df_filtered = apply_hard_filters(df_full)
+
+# ── Show hard-filter results ────────────────────────────────────────────────
+
+st.subheader(f"Hard-filtered neighborhoods ({len(df_filtered)} of {len(df_full)})")
+
+with st.expander("View generated SQL", expanded=False):
+    borough_list_display = ", ".join(f"'{b}'" for b in selected_boroughs)
+    st.code(
+        f"SELECT * FROM neighborhoods\n"
+        f"WHERE borough IN ({borough_list_display})\n"
+        f"  AND subway_station_count >= {subway_range}\n"
+        f"  AND avg_pedestrian >= {ped_threshold}\n"
+        f"  AND poi_density_per_km2 >= {density_threshold}\n"
+        f"  AND total_poi >= {poi_threshold}\n"
+        f"  AND commercial_activity_score >= {comm_threshold}\n"
+        f"ORDER BY commercial_activity_score DESC;",
+        language="sql",
+    )
+
+if df_filtered.empty:
+    st.warning("No neighborhoods match the current hard filters. Loosen your constraints.")
+    st.stop()
+
+display_cols = [
+    "neighborhood", "borough", "total_poi", "subway_station_count",
+    "avg_pedestrian", "poi_density_per_km2", "commercial_activity_score",
+    "transit_activity_score",
+]
 st.dataframe(
-    {
-        "neighborhood_id": [],
-        "similarity": [],
-        "predicted_persistence": [],
-        "final_score": [],
-    },
+    df_filtered[display_cols].reset_index(drop=True),
     use_container_width=True,
+    height=300,
+)
+
+# ── Sidebar: Soft Preferences ──────────────────────────────────────────────
+
+st.sidebar.markdown("---")
+st.sidebar.header("Soft Preferences")
+st.sidebar.caption(
+    "Free-text description of what you're looking for. Claude will analyze "
+    "the hard-filtered data and recommend neighborhoods."
+)
+
+soft_query = st.sidebar.text_area(
+    "Describe your ideal area",
+    value="quiet residential area suitable for boutique retail with good subway access",
+    height=100,
+)
+
+alpha = st.sidebar.slider(
+    "Weight: semantic similarity (\u03b1)",
+    0.0, 1.0, 0.5, 0.05,
+    help="\u03b1 weights semantic match; (1-\u03b1) weights commercial activity.",
+)
+beta = 1.0 - alpha
+st.sidebar.caption(f"Commercial activity weight (\u03b2) = {beta:.2f}")
+
+# ── Semantic similarity on filtered set ─────────────────────────────────────
+
+st.subheader("Semantic ranking")
+
+@st.cache_data(show_spinner="Loading neighborhood embeddings...")
+def get_all_embeddings():
+    return embed_neighborhood_features()
+
+try:
+    all_embeddings, all_texts = get_all_embeddings()
+
+    # Map filtered neighborhoods to their index in the full dataset
+    full_neighborhoods = load_data()["neighborhood"].tolist()
+    filtered_neighborhoods = df_filtered["neighborhood"].tolist()
+    idx_map = {name: i for i, name in enumerate(full_neighborhoods)}
+    filtered_indices = [idx_map[n] for n in filtered_neighborhoods if n in idx_map]
+
+    if filtered_indices:
+        filtered_embeddings = all_embeddings[filtered_indices]
+
+        # Embed the user query
+        query_embedding = embed_texts([soft_query])[0]
+
+        # Compute cosine similarity
+        sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
+
+        # Normalize scores for blending
+        def minmax(arr: np.ndarray) -> np.ndarray:
+            mn, mx = arr.min(), arr.max()
+            return (arr - mn) / (mx - mn + 1e-12)
+
+        sim_norm = minmax(sim_scores)
+
+        # Normalize commercial activity for the beta weight
+        comm_scores = df_filtered.iloc[[
+            filtered_neighborhoods.index(n)
+            for n in [filtered_neighborhoods[i] for i in range(len(filtered_indices))]
+        ]]["commercial_activity_score"].values.astype(float)
+        comm_norm = minmax(comm_scores)
+
+        # Blend
+        final_scores = alpha * sim_norm + beta * comm_norm
+
+        ranking_df = pd.DataFrame({
+            "neighborhood": [filtered_neighborhoods[i] for i in range(len(filtered_indices))],
+            "semantic_similarity": sim_scores.round(4),
+            "commercial_activity": comm_scores.round(0).astype(int),
+            "blended_score": final_scores.round(4),
+        }).sort_values("blended_score", ascending=False).reset_index(drop=True)
+
+        ranking_df.index = ranking_df.index + 1
+        ranking_df.index.name = "rank"
+
+        st.dataframe(ranking_df, use_container_width=True, height=350)
+    else:
+        st.info("Could not map filtered neighborhoods to embeddings.")
+
+except Exception as e:
+    st.warning(
+        f"Semantic search unavailable (embeddings not cached or OPENAI_API_KEY not set): {e}\n\n"
+        "Run `python -m src.embeddings` to generate embeddings first, or set OPENAI_API_KEY in .env."
+    )
+
+# ── Claude agent analysis ──────────────────────────────────────────────────
+
+st.subheader("AI analysis (Claude)")
+
+if st.button("Ask Claude to analyze filtered data", type="primary"):
+    with st.spinner("Claude is analyzing the filtered neighborhoods..."):
+        try:
+            prompt = (
+                f"The user is looking for: {soft_query}\n\n"
+                f"There are {len(df_filtered)} neighborhoods that passed the hard filters. "
+                f"Use the run_sql tool to explore the data and recommend the top 3-5 "
+                f"neighborhoods that best match the user's soft preferences. "
+                f"Explain your reasoning with specific data points."
+            )
+            answer = run_agent(prompt, df_filtered)
+            st.markdown(answer)
+        except Exception as e:
+            st.error(f"Claude agent error: {e}\n\nMake sure ANTHROPIC_API_KEY is set in your .env file.")
+
+# ── Feature summary ─────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.subheader("Feature summary")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("**Hard filter columns** (DuckDB SQL)")
+    st.markdown(
+        "| Column | Type | Description |\n"
+        "|--------|------|-------------|\n"
+        "| `borough` | categorical | NYC borough (5 values) |\n"
+        "| `subway_station_count` | int | Subway stations in neighborhood |\n"
+        "| `avg_pedestrian` | float | Average pedestrian count |\n"
+        "| `poi_density_per_km2` | float | Business density per km\u00b2 |\n"
+        "| `total_poi` | int | Total points of interest |\n"
+        "| `commercial_activity_score` | float | POI \u00d7 pedestrian activity |"
+    )
+
+with col2:
+    st.markdown("**Soft / embedded columns** (OpenAI `text-embedding-3-small`)")
+    st.markdown(
+        "| Column | Used in text profile |\n"
+        "|--------|---------------------|\n"
+        "| `neighborhood` | Name context |\n"
+        "| `borough` | Geographic context |\n"
+        "| `total_poi` | Business count |\n"
+        "| `category_entropy` | Industry diversity |\n"
+        "| `avg_pedestrian` | Foot traffic level |\n"
+        "| `subway_station_count` | Transit access |\n"
+        "| `poi_density_per_km2` | Density descriptor |\n"
+        "| `commercial_activity_score` | Activity level |\n"
+        "| `transit_activity_score` | Transit activity |"
+    )
+
+st.markdown(
+    "**Pipeline**: Hard filters (sidebar) \u2192 DuckDB SQL query \u2192 filtered rows \u2192 "
+    "semantic similarity (OpenAI embeddings) + Claude agentic analysis (tool-use SQL) \u2192 ranked results."
 )

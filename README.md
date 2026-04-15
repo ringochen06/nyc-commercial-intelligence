@@ -15,9 +15,9 @@ The **Streamlit app** (`app.py`) ranks neighborhoods using **hard filters (DuckD
 ## End-to-end data flow
 
 1. **Raw data** in `data/raw/` (CSVs + CDTA shapefile under `nyc_boundaries/`). See `data/raw/README.MD`.
-2. **`python run_pipeline.py`** — `src/data_processing.py` cleans sources; `src/feature_engineering.py` spatially aggregates to CDTA and merges neighborhood profile columns on a normalized Community District key → **`data/processed/neighborhood_features_final.csv`**. The table includes **`commercial_activity_score`** (and **`transit_activity_score`**, etc.). **Profile columns** (demographics, jobs, etc.) may be **NaN** for some CDTAs where the profile CSV has no matching row; that is a **coverage / join** limitation, not necessarily corrupt raw files. The pipeline prints NaN counts with that expectation.
-3. **Embeddings (for the app)** — `python -m src.embeddings` builds OpenAI embeddings from neighborhood text profiles; caches under `outputs/embeddings/`. Requires `OPENAI_API_KEY`.
-4. **`streamlit run app.py`** — loads the feature table and runs the logic below.
+2. **`python run_pipeline.py`** — `src/data_processing.py` cleans sources (including optional **Neighborhood Financial Health** / NFH CSV merged into `nbhd_clean` when the file is present); `src/feature_engineering.py` spatially aggregates to CDTA, merges **MOCEJ-style neighborhood profiles** and **`nfh_*` columns** on a normalized Community District key, then **imputes** remaining gaps in those merged numeric columns with **borough median, then citywide median** (dashboard-friendly proxy where a CDTA does not match a single profile row). **`commercial_activity_score`** = `total_poi` × `avg_pedestrian` and **`transit_activity_score`** = `subway_station_count` × `avg_pedestrian`, computed **after** filling missing POI/subway/pedestrian inputs so scores are not stuck at zero from ordering alone. Output: **`data/processed/neighborhood_features_final.csv`**. A healthy run ends with **no missing values** in that table; if any column still has NaN, investigate before shipping.
+3. **Embeddings (for the app)** — `python -m src.embeddings` builds OpenAI embeddings from neighborhood text profiles; caches under `outputs/embeddings/`. Requires `OPENAI_API_KEY`. Use **`--force`** after changing features or profile text so embeddings match the CSV.
+4. **`streamlit run app.py`** — loads the feature table (cached; use **Rerun** or **Clear cache** after regenerating the CSV) and runs the logic below.
 
 ---
 
@@ -31,8 +31,9 @@ Sidebar controls set thresholds on:
 
 - **Borough** (multiselect)
 - **Minimum** `subway_station_count`, `avg_pedestrian`, `poi_density_per_km2`, `total_poi`, `commercial_activity_score`
+- **Optional NFH** (when `nfh_overall_score` / `nfh_goal4_fin_shocks_score` exist): minimum thresholds via optional checkboxes and sliders
 
-These are applied with **DuckDB**: the full table is registered as `nbhd`, a `SELECT … WHERE …` runs, and rows are ordered by **`commercial_activity_score` DESC**. The main area shows a table of surviving neighborhoods (key columns). **View generated SQL** expands to show the exact query.
+These are applied with **DuckDB**: the full table is registered as `nbhd`, a `SELECT … WHERE …` runs, and rows are ordered by **`commercial_activity_score` DESC**. The main area shows a table of surviving neighborhoods (key columns). **View generated SQL** expands to show the exact query. An expander (**About zeros, nulls, and refreshing data**) documents imputation, score formulas, and when zeros are expected.
 
 If no rows match, the app stops with a warning.
 
@@ -165,10 +166,9 @@ Includes skipped scaffolds for K-means and persistence labels until those module
 
 ## Data & live demo
 
-- **`data/raw/`** and **`data/processed/`** are **not committed** by default (see `.gitignore`). Cloning GitHub gives you code only, not CSVs or shapefiles.
-- **Prepare data:** follow `data/raw/README.MD` (e.g. Hugging Face `ringoch/nyc-commercial-data` or NYC Open Data). Filenames must match `run_pipeline.py`.
-- **Build processed tables:** `python run_pipeline.py` writes `data/processed/neighborhood_features_final.csv` (requires **`geopandas`** among deps).
-- **Demo on a new machine:** copy `data/raw` (and optionally `data/processed`) from USB / Hugging Face / zip — **do not assume** data is on GitHub.
+- **`data/processed/`** is **committed** so you can run **`streamlit run app.py`** without rebuilding features. Re-run **`python run_pipeline.py`** after changing pipeline code or raw inputs.
+- **`data/raw/`** CSVs are **not committed** (download locally; see `data/raw/README.MD`). The **CDTA 2020 shapefile** under **`data/raw/nyc_boundaries/nycdta2020.*`** **is committed** (~1.5MB) so spatial joins work out of the box. Large sources (e.g. restaurant inspections) stay local.
+- **Regenerate processed tables:** `python run_pipeline.py` (requires **`geopandas`**, local CSVs as above, and the repo shapefile path).
 
 ## Notes
 

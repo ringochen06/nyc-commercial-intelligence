@@ -47,6 +47,8 @@ def build_text_profile(row: pd.Series) -> str:
     density = round(float(row.get("poi_density_per_km2", 0)), 1)
     commercial = round(float(row.get("commercial_activity_score", 0)), 0)
     transit = round(float(row.get("transit_activity_score", 0)), 0)
+    nfh_overall = row.get("nfh_overall_score")
+    nfh_shocks = row.get("nfh_goal4_fin_shocks_score")
 
     # Qualitative descriptors
     foot_traffic = (
@@ -67,6 +69,11 @@ def build_text_profile(row: pd.Series) -> str:
         else "moderate" if entropy > 0.4
         else "limited"
     )
+    nfh_txt = ""
+    if pd.notna(nfh_overall):
+        nfh_txt += f" Neighborhood financial health overall index score is {float(nfh_overall):.2f}."
+    if pd.notna(nfh_shocks):
+        nfh_txt += f" Financial-shock resilience score is {float(nfh_shocks):.2f}."
 
     return (
         f"{name} in {borough}. "
@@ -75,6 +82,7 @@ def build_text_profile(row: pd.Series) -> str:
         f"{foot_traffic} foot traffic (avg {ped} pedestrians). "
         f"{subway} subway stations nearby. "
         f"Commercial activity score {commercial}, transit activity score {transit}."
+        f"{nfh_txt}"
     )
 
 

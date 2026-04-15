@@ -71,17 +71,18 @@ Cleaned point-level subway station dataset.
 
 ### `nbhd_clean.csv`
 
-Cleaned area-level socioeconomic dataset derived from NYC Public Neighborhood Profiles (column selection in `src/data_processing.py`).
+Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood Profiles** (MOCEJ-style column selection in `src/data_processing.py`), optionally merged with **Neighborhood Financial Health (NFH)** indicators when `data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool_*.csv` is present and readable.
 
 **Main fields (non-exhaustive)**
 
-- `neighborhood`, `cd` (community district string), `borough`
+- `neighborhood`, `cd` (community district string, including combined districts such as `BX01 & BX02`), `borough`
 - Job and business counts: `construction_jobs`, `manufacturing_jobs`, `wholesale_jobs`, `food_services`, `total_businesses`
-- Demographics / SES proxies: `median_household_income`, `commute_public_transit`, `pct_bachelors_plus`, race share columns and derived `pct_*` fields
+- Demographics / SES proxies: `median_household_income`, `commute_public_transit`, `pct_bachelors_plus`, race population columns and derived `pct_*`, `total_jobs`, `total_population_proxy`
+- **NFH (when merged):** `nfh_overall_score`, `nfh_goal4_fin_shocks_score`, other `nfh_goal*_score` / `*_rank`, and demographic columns such as `nfh_median_income`, `nfh_poverty_rate`, `nfh_pct_*` (see CSV header for the full list)
 
 **Purpose**
 
-- Joined to the CDTA-level feature table by normalized community-district / CDTA codes (`src/feature_engineering.py`), not used as the spatial base map. Row count is typically **smaller** than the number of CDTA polygons (e.g. ~55 profile rows vs ~71 CDTAs), so **many** CDTA rows get profile columns; **some** CDTAs have **no** matching profile row and keep **NaN** for those attributes.
+- Joined onto the CDTA master table by a normalized district key (`normalize_cdta_join_key` in `src/feature_engineering.py`). NFH source rows use labels like `BX Community District 8`; these are normalized to codes such as `BX08` in `src/data_processing.py` so they align with the same join logic as MOCEJ rows.
 
 ---
 
@@ -92,7 +93,7 @@ Cleaned area-level socioeconomic dataset derived from NYC Public Neighborhood Pr
 - **`neighborhood_features.csv`** — written by `run_feature_engineering()` in `src/feature_engineering.py`.
 - **`neighborhood_features_final.csv`** — same table, saved again by `run_pipeline.py` as the default input for **`app.py`** and **`src/embeddings.py`**.
 
-Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. Typical size with the current pipeline: **on the order of ~71 rows × ~38 columns** (exact counts depend on boundary + profile join).
+Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows × ~55 columns** (exact counts depend on boundary file and which optional columns exist in `nbhd_clean`).
 
 **Not in this table:** There is **no** `persistence_score` column in the current pipeline; the app blends **semantic similarity** and **`commercial_activity_score`** only (see below).
 
@@ -100,7 +101,7 @@ Sources integrated:
 
 - POI (restaurant + retail licenses), pedestrian counts, subway stations (aggregated after spatial join)  
 - CDTA area (`area_km2`) and density / interaction features  
-- **Neighborhood profile columns** from `nbhd_clean` merged where `cd` keys match after normalization (some CDTA rows may have no matching profile row — **expected**, not bad raw data)
+- **MOCEJ + NFH columns** from `nbhd_clean`, merged on the normalized district key. Where a CDTA still has no direct match after normalization, **numeric** profile and `nfh_*` columns are **imputed** in `merge_all_features` (borough median, then citywide median) so the final CSV has **no NaNs** and the Streamlit hard filters stay usable. Treat imputed values as **proxies**, not tract-level ground truth.
 
 ---
 
@@ -129,16 +130,16 @@ Sources integrated:
 
 **Interaction Features**
 
-- `commercial_activity_score` (POI × pedestrian intensity) — used in **`app.py`** after MinMax scaling alongside semantic similarity  
-- `transit_activity_score` (subway × pedestrian intensity)
+- `commercial_activity_score` = **`total_poi` × `avg_pedestrian`** (after missing POI counts are set to 0 and pedestrian averages are filled with the citywide mean, then any remaining NaN pedestrian with 0). Used in **`app.py`** after MinMax scaling alongside semantic similarity.  
+- `transit_activity_score` = **`subway_station_count` × `avg_pedestrian`** with the same pedestrian handling. A value can still be **0** when `total_poi` or `subway_station_count` is 0 or pedestrian signal is 0.
 
 **Geometry / area**
 
 - `area_km2`
 
-**Neighborhood profile (when join succeeds)**  
+**Neighborhood profile (MOCEJ) and NFH**
 
-Examples: `median_household_income`, `pct_bachelors_plus`, `commute_public_transit`, `total_businesses`, job counts, race population proxies — see column names in the CSV for the full list.
+Examples: `median_household_income`, `pct_bachelors_plus`, `commute_public_transit`, `total_businesses`, job counts, race population proxies; `nfh_overall_score`, `nfh_goal4_fin_shocks_score`, and other `nfh_*` columns when the NFH CSV was merged in `data_processing`. See the CSV header for the full list.
 
 ---
 
@@ -148,7 +149,8 @@ Examples: `median_household_income`, `pct_bachelors_plus`, `commute_public_trans
 2. **`streamlit run app.py`** loads the CSV (cached) and embeddings (cached).  
 3. **Hard filters:** DuckDB `SELECT` with sidebar thresholds (borough, subway, pedestrian, POI density, total POI, **`commercial_activity_score`**, etc.).  
 4. **Soft ranking:** On the filtered rows, **MinMaxScaler** is fit on **`[cosine_sim, commercial_activity_score]`**. The user sets **one** blend slider **α** for semantic weight; **β = 1 − α** for the scaled activity column. Output column: **`blended_score`**.  
-5. Optional **Claude** panel: read-only SQL on the filtered dataframe (`ANTHROPIC_API_KEY`).
+5. Optional **NFH thresholds** in the sidebar when those columns exist.  
+6. Optional **Claude** panel: read-only SQL on the filtered dataframe (`ANTHROPIC_API_KEY`).
 
 Details and setup: **root `README.md`**.
 
@@ -158,17 +160,18 @@ Details and setup: **root `README.md`**.
 
 1. Raw datasets are cleaned (`src/data_processing.py`) → `*_clean.csv` under `data/processed/`.  
 2. Point layers are spatially joined to CDTA boundaries; features are aggregated per CDTA (`src/feature_engineering.py`).  
-3. **`nbhd_clean` is merged** onto the CDTA master table using a normalized district code (see `normalize_cdta_join_key`).  
-4. **Missing values (spatial / activity columns):**
-   - Pedestrian aggregates: mean imputation for `avg_pedestrian` / `peak_pedestrian` where missing after aggregation.  
-   - POI / retail / subway-related counts and densities: filled with **0** where appropriate.  
-5. **Profile columns:** may remain **NaN** for CDTA polygons with no matching neighborhood-profile row. `run_pipeline.py` prints NaN counts with a note that this is **expected** for join gaps, not necessarily corrupt sources.
+3. **`nbhd_clean` is merged** onto the CDTA master table using a normalized district code (see `normalize_cdta_join_key` in `src/feature_engineering.py`).  
+4. **Missing values (spatial / activity columns):** POI / retail / subway counts and densities are filled with **0** where appropriate. **Pedestrian:** `avg_pedestrian` / `peak_pedestrian` use **mean** then **0** for any residual NaN; `pedestrian_count_points` missing → **0**.  
+5. **Interaction scores** (`commercial_activity_score`, `transit_activity_score`) are computed **after** those fills so they reflect imputed inputs, not premature `× 0` from NaNs.  
+6. **Profile + `nfh_*` numeric columns** after the merge: **borough median**, then **citywide median**, for any remaining NaN.  
+7. **`run_pipeline.py`** prints a NaN summary; a **clean** build should report **no missing values** in the final feature table.
 
 ---
 
 ### Notes
 
-- **Geography** is CDTA; neighborhood-profile data enters as **attributes**, not as the boundary source.  
+- **Geography** is CDTA; neighborhood-profile and NFH data enter as **attributes**, not as the boundary source.  
+- **Combined community districts** (e.g. `BX01 & BX02` in MOCEJ, or `BX Community Districts 1 & 2` in NFH) are normalized to a **single** code (first district number) for joining; that is an intentional mapping, not duplicate rows in the source.  
 - Pedestrian coverage is limited by where sensors exist.  
-- This folder’s CSVs are **generated locally** and are **gitignored** by default; cloning the repo alone does not include them.  
+- This folder’s CSVs are **committed in the repo** for convenience; regenerate anytime with **`python run_pipeline.py`** after changing code or raw inputs.  
 - If OpenAI returns **429 / insufficient_quota** when embedding, fix billing or quota for `OPENAI_API_KEY`, then rerun **`python -m src.embeddings`**.

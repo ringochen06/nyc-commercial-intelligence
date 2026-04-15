@@ -5,6 +5,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import re
 
 
 # =========================================================
@@ -61,6 +62,50 @@ def clean_numeric_string(series: pd.Series) -> pd.Series:
         .str.strip(),
         errors="coerce"
     )
+
+
+def normalize_cd_code(cd: str | float | None) -> Optional[str]:
+    """
+    Normalize CD / CDTA-style strings to DCP-style keys (e.g. MN01, BK18).
+
+    Keep logic aligned with ``feature_engineering.normalize_cdta_join_key`` so
+    NFH merges and the CDTA master merge use the same join key.
+    """
+    if cd is None or (isinstance(cd, float) and pd.isna(cd)):
+        return None
+    s = str(cd).strip().upper()
+    if not s or s == "NAN":
+        return None
+
+    if re.fullmatch(r"\d{3}", s):
+        boro_digit, dist_str = s[0], s[1:3]
+        bmap = {"1": "MN", "2": "BX", "3": "BK", "4": "QN", "5": "SI"}
+        pref = bmap.get(boro_digit)
+        if pref is None:
+            return None
+        dist = int(dist_str)
+        if dist < 1:
+            return None
+        return f"{pref}{dist:02d}"
+
+    m = re.match(r"^(BX|BK|MN|QN|SI)\s*0*(\d{1,2})$", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    m = re.search(r"(BX|BK|MN|QN|SI)\s*0*(\d{1,2})\b", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+
+    # NFH / Planning exports: "BX Community District 8", "BX Community Districts 3 & 6"
+    m = re.search(
+        r"(BX|BK|MN|QN|SI)\s+COMMUNITY\s+DISTRICTS?\s+(\d{1,2})(?:\s*&\s*(\d{1,2}))?",
+        s,
+    )
+    if m:
+        pref = m.group(1).upper()
+        dist = int(m.group(2))
+        return f"{pref}{dist:02d}"
+
+    return None
 
 
 # =========================================================
@@ -284,7 +329,89 @@ def build_poi_table(restaurant_path: str | Path, license_path: str | Path) -> pd
 # 5. Neighborhood profile data
 # =========================================================
 
-def clean_neighborhood_profiles(nbhd_path: str | Path) -> pd.DataFrame:
+def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
+    """
+    Build one row per CD with selected Neighborhood Financial Health features.
+    """
+    df_nfh = pd.read_csv(nfh_path)
+
+    base_cols = [
+        "CD",
+        "Median_Income",
+        "NYC_Poverty_Rate",
+        "Perc_White",
+        "Perc_Black",
+        "Perc_Asian",
+        "Perc_Hispanic",
+    ]
+    goal_cols = ["CD", "Goal", "IndexScore", "GoalRank"]
+    if not set(base_cols).issubset(df_nfh.columns):
+        return pd.DataFrame(columns=["cd"])
+    if not set(goal_cols).issubset(df_nfh.columns):
+        return pd.DataFrame(columns=["cd"])
+
+    goal_map = {
+        "Overall Index": "nfh_overall",
+        "Financial Services": "nfh_goal1_fin_services",
+        "Goods & Services": "nfh_goal2_goods_services",
+        "Jobs & Income": "nfh_goal3_jobs_income",
+        "Financial Shocks": "nfh_goal4_fin_shocks",
+        "Build Assets": "nfh_goal5_build_assets",
+    }
+
+    base = df_nfh[base_cols].copy()
+    base["cd"] = base["CD"].map(normalize_cd_code)
+    base = base.dropna(subset=["cd"]).drop_duplicates(subset=["cd"], keep="first")
+    base = base.rename(
+        columns={
+            "Median_Income": "nfh_median_income",
+            "NYC_Poverty_Rate": "nfh_poverty_rate",
+            "Perc_White": "nfh_pct_white",
+            "Perc_Black": "nfh_pct_black",
+            "Perc_Asian": "nfh_pct_asian",
+            "Perc_Hispanic": "nfh_pct_hispanic",
+        }
+    )
+    for col in [
+        "nfh_median_income",
+        "nfh_poverty_rate",
+        "nfh_pct_white",
+        "nfh_pct_black",
+        "nfh_pct_asian",
+        "nfh_pct_hispanic",
+    ]:
+        base[col] = clean_numeric_string(base[col])
+
+    goals = df_nfh[goal_cols].copy()
+    goals["cd"] = goals["CD"].map(normalize_cd_code)
+    goals = goals.dropna(subset=["cd"])
+    goals = goals[goals["Goal"].isin(goal_map.keys())].copy()
+    goals["metric"] = goals["Goal"].map(goal_map)
+    goals["IndexScore"] = clean_numeric_string(goals["IndexScore"])
+    goals["GoalRank"] = clean_numeric_string(goals["GoalRank"])
+
+    score_wide = (
+        goals.pivot_table(index="cd", columns="metric", values="IndexScore", aggfunc="first")
+        .reset_index()
+    )
+    score_wide = score_wide.rename(
+        columns={c: f"{c}_score" for c in score_wide.columns if c != "cd"}
+    )
+
+    rank_wide = (
+        goals.pivot_table(index="cd", columns="metric", values="GoalRank", aggfunc="first")
+        .reset_index()
+    )
+    rank_wide = rank_wide.rename(
+        columns={c: f"{c}_rank" for c in rank_wide.columns if c != "cd"}
+    )
+
+    out = base.merge(score_wide, on="cd", how="left").merge(rank_wide, on="cd", how="left")
+    out = out.drop(columns=["CD"], errors="ignore")
+    return out.reset_index(drop=True)
+
+
+def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | None = None) -> pd.DataFrame:
     df_nbhd = pd.read_csv(nbhd_path)
 
     keep_cols = [
@@ -360,6 +487,17 @@ def clean_neighborhood_profiles(nbhd_path: str | Path) -> pd.DataFrame:
     df["pct_black"] = df["pop_black"] / denom
     df["pct_asian"] = df["pop_asian"] / denom
 
+    if nfh_path is not None and Path(nfh_path).exists():
+        nfh = clean_nfh_profiles(nfh_path)
+        if not nfh.empty:
+            df["_cd_norm"] = df["cd"].map(normalize_cd_code)
+            df = df.merge(
+                nfh.rename(columns={"cd": "_cd_norm"}),
+                on="_cd_norm",
+                how="left",
+            )
+            df = df.drop(columns=["_cd_norm"])
+
     return df.reset_index(drop=True)
 
 
@@ -374,6 +512,7 @@ def run_data_processing(
     restaurant_path: str | Path,
     license_path: str | Path,
     nbhd_path: str | Path,
+    nfh_path: str | Path | None = None,
     output_dir: str | Path = "data/processed",
 ) -> dict[str, pd.DataFrame]:
     output_dir = Path(output_dir)
@@ -382,7 +521,7 @@ def run_data_processing(
     ped = clean_pedestrian_data(pedestrian_path)
     subway = clean_subway_data(subway_path)
     poi = build_poi_table(restaurant_path, license_path)
-    nbhd = clean_neighborhood_profiles(nbhd_path)
+    nbhd = clean_neighborhood_profiles(nbhd_path, nfh_path=nfh_path)
 
     ped.to_csv(output_dir / "ped_clean.csv", index=False)
     subway.to_csv(output_dir / "subway_clean.csv", index=False)

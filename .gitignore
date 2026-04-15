@@ -12,11 +12,15 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 
-# Data & large artifacts (keep structure, not files)
-data/raw/*
+# Raw data: CSVs etc. stay local (see data/raw/README.MD). CDTA shapefile is small (~1.5MB) and tracked.
+data/raw/**
 !data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+!data/raw/README.MD
+!data/raw/nyc_boundaries/
+!data/raw/nyc_boundaries/.gitkeep
+!data/raw/nyc_boundaries/nycdta2020.*
+
+# Processed pipeline outputs are versioned so clones can run the app without re-running ETL.
 outputs/models/*
 !outputs/models/.gitkeep
 outputs/embeddings/*

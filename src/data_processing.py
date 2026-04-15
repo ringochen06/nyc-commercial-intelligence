@@ -69,21 +69,34 @@ def clean_numeric_string(series: pd.Series) -> pd.Series:
 
 def clean_pedestrian_data(ped_path: str | Path) -> pd.DataFrame:
     df_ped = pd.read_csv(ped_path)
-    
-    if "the_geom" in df_ped.columns:
-        df_ped["longitude"] = df_ped["the_geom"].astype(str).str.extract(r"POINT \((-?\d+\.\d+)")[0]
-        df_ped["latitude"] = df_ped["the_geom"].astype(str).str.extract(r"POINT \(-?\d+\.\d+ (\d+\.\d+)\)")[0]
 
-    df_ped["longitude"] = pd.to_numeric(df_ped["longitude"], errors="coerce")
-    df_ped["latitude"] = pd.to_numeric(df_ped["latitude"], errors="coerce")
+    if "the_geom" in df_ped.columns:
+        geom = df_ped["the_geom"].astype(str)
+        lon = pd.to_numeric(geom.str.extract(r"POINT \((-?\d+\.\d+)")[0], errors="coerce")
+        lat = pd.to_numeric(geom.str.extract(r"POINT \(-?\d+\.\d+ (\d+\.\d+)\)")[0], errors="coerce")
+    else:
+        lon = pd.to_numeric(df_ped["longitude"], errors="coerce")
+        lat = pd.to_numeric(df_ped["latitude"], errors="coerce")
 
     ped_cols = [col for col in df_ped.columns if "_AM" in col or "_PM" in col or "_MD" in col]
     if ped_cols:
-        df_ped["avg_pedestrian"] = df_ped[ped_cols].mean(axis=1)
-        df_ped["peak_pedestrian"] = df_ped[ped_cols].max(axis=1)
+        avg_ped = df_ped[ped_cols].mean(axis=1)
+        peak_ped = df_ped[ped_cols].max(axis=1)
     else:
-        df_ped["avg_pedestrian"] = np.nan
-        df_ped["peak_pedestrian"] = np.nan
+        avg_ped = pd.Series(np.nan, index=df_ped.index)
+        peak_ped = pd.Series(np.nan, index=df_ped.index)
+
+    derived = pd.DataFrame(
+        {
+            "longitude": lon,
+            "latitude": lat,
+            "avg_pedestrian": avg_ped,
+            "peak_pedestrian": peak_ped,
+        },
+        index=df_ped.index,
+    )
+    drop_lon_lat = [c for c in ("longitude", "latitude") if c in df_ped.columns]
+    df_ped = pd.concat([df_ped.drop(columns=drop_lon_lat, errors="ignore"), derived], axis=1)
 
     keep_cols = [c for c in [
         "Borough",

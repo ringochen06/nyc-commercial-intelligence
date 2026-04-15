@@ -34,8 +34,16 @@ df_final.to_csv("data/processed/neighborhood_features_final.csv", index=False)
 
 print("Feature engineering finished.")
 print("Final feature table shape:", df_final.shape)
-print("\nMissing values:")
-print(df_final.isna().sum().sort_values(ascending=False).head(15))
+na_counts = df_final.isna().sum()
+na_cols = na_counts[na_counts > 0].sort_values(ascending=False)
+if len(na_cols):
+    print(
+        "\nNaN counts (expected for profile columns where nbhd_clean has no row "
+        "for that CDTA — not a sign of corrupt raw data):"
+    )
+    print(na_cols.head(20))
+else:
+    print("\nNo missing values in the final table.")
 
 print("\nPreview:")
 print(df_final.head())

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +40,41 @@ def entropy_from_counts(values: np.ndarray) -> float:
         return 0.0
     p = values[values > 0] / total
     return float(-(p * np.log(p)).sum())
+
+
+def normalize_cdta_join_key(cd: str | float | None) -> Optional[str]:
+    """
+    Map Community District / CDTA-style strings to DCP CDTA2020-style keys (e.g. MN01, BK18).
+
+    Handles:
+    - Already-normal 4-char codes (MN1 -> MN01)
+    - Long labels containing a borough token + district number
+    - NYC 3-digit Geosupport codes (101 -> Manhattan CD 1 -> MN01)
+    """
+    if cd is None or (isinstance(cd, float) and pd.isna(cd)):
+        return None
+    s = str(cd).strip().upper()
+    if not s or s == "NAN":
+        return None
+
+    if re.fullmatch(r"\d{3}", s):
+        boro_digit, dist_str = s[0], s[1:3]
+        bmap = {"1": "MN", "2": "BX", "3": "BK", "4": "QN", "5": "SI"}
+        pref = bmap.get(boro_digit)
+        if pref is None:
+            return None
+        dist = int(dist_str)
+        if dist < 1:
+            return None
+        return f"{pref}{dist:02d}"
+
+    m = re.match(r"^(BX|BK|MN|QN|SI)\s*0*(\d{1,2})$", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    m = re.search(r"(BX|BK|MN|QN|SI)\s*0*(\d{1,2})\b", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    return None
 
 
 # =========================================================
@@ -274,6 +311,31 @@ def merge_all_features(
 
     for other in [poi_feat, ped_feat, subway_feat]:
         df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
+
+    # Neighborhood profile (MOCEJ / Planning-style CSV), keyed by Community District ~ CDTA2020.
+    # Rows with NaN in profile_* columns are CDTAs present in boundaries but without a matching
+    # profile row after join-key normalization — expected, not bad input data.
+    df["_cd_join"] = df["cd"].map(normalize_cdta_join_key)
+    nb = nbhd_clean.copy()
+    nb["_cd_join"] = nb["cd"].map(normalize_cdta_join_key)
+    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(subset=["_cd_join"], keep="first")
+    profile_cols = [
+        c
+        for c in nb.columns
+        if c not in ("neighborhood", "borough", "cd", "_cd_join")
+    ]
+    if profile_cols:
+        n_with_key = df["_cd_join"].notna().sum()
+        df = df.merge(nb[["_cd_join"] + profile_cols], on="_cd_join", how="left")
+        probe = profile_cols[0]
+        n_matched = int(df[probe].notna().sum()) if probe in df.columns else 0
+        if n_with_key > 0 and n_matched < n_with_key * 0.5:
+            warnings.warn(
+                "Less than half of rows with a parsed CD code matched neighborhood profile data. "
+                "Check that raw `Community District` values align with CDTA2020 (see normalize_cdta_join_key).",
+                stacklevel=2,
+            )
+    df = df.drop(columns=["_cd_join"])
 
     # density features
     if "area_km2" in df.columns:

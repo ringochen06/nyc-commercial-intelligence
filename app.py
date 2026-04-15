@@ -2,8 +2,10 @@
 NYC Commercial Intelligence — Streamlit dashboard.
 
 Hard constraints  : sidebar controls → DuckDB SQL filters (deterministic)
-Soft preferences  : free-text query  → Claude agentic tool-use on filtered data
+Soft ranking      : α·semantic + β·commercial_activity
+                    (MinMax-scaled to [0,1] on the filtered set; β = 1 − α from one slider)
 Semantic search   : OpenAI embeddings cosine similarity on neighborhood profiles
+Optional Claude   : read-only SQL on filtered data
 
 Run:  streamlit run app.py
 """
@@ -18,6 +20,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+from sklearn.preprocessing import MinMaxScaler
 
 load_dotenv()
 
@@ -26,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from agent import run_agent  # noqa: E402
 from embeddings import (  # noqa: E402
-    build_all_profiles,
     cosine_similarity,
     embed_neighborhood_features,
     embed_texts,
@@ -42,8 +44,8 @@ st.set_page_config(
 
 st.title("NYC Commercial Intelligence")
 st.caption(
-    "Rank NYC neighborhoods for commercial site selection using hard filters "
-    "(DuckDB SQL) and soft preferences (Claude agentic analysis + semantic search)."
+    "Rank NYC neighborhoods using hard filters (DuckDB SQL), then α·semantic + β·commercial activity "
+    "(MinMax-normalized on the filtered set; one blend slider: β = 1 − α). Optional Claude analysis."
 )
 
 # ── Load data ───────────────────────────────────────────────────────────────
@@ -203,17 +205,22 @@ soft_query = st.sidebar.text_area(
     height=100,
 )
 
+st.sidebar.markdown("**Blend** (α + β = 1)")
 alpha = st.sidebar.slider(
-    "Weight: semantic similarity (\u03b1)",
-    0.0, 1.0, 0.5, 0.05,
-    help="\u03b1 weights semantic match; (1-\u03b1) weights commercial activity.",
+    "\u03b1 — semantic similarity",
+    0.0,
+    1.0,
+    0.5,
+    0.05,
+    help="Weight on embedding cosine similarity; β = 1 − α goes to commercial_activity_score.",
 )
 beta = 1.0 - alpha
-st.sidebar.caption(f"Commercial activity weight (\u03b2) = {beta:.2f}")
+_w = np.array([alpha, beta], dtype=float)
+st.sidebar.caption(f"\u03b2 — commercial activity = 1 − \u03b1 → \u03b1={alpha:.3f}, \u03b2={beta:.3f}")
 
-# ── Semantic similarity on filtered set ─────────────────────────────────────
+# ── Soft ranking: semantic + commercial activity ────────────────────────────
 
-st.subheader("Semantic ranking")
+st.subheader("Soft ranking (α·semantic + β·commercial activity)")
 
 @st.cache_data(show_spinner="Loading neighborhood embeddings...")
 def get_all_embeddings():
@@ -222,7 +229,6 @@ def get_all_embeddings():
 try:
     all_embeddings, all_texts = get_all_embeddings()
 
-    # Map filtered neighborhoods to their index in the full dataset
     full_neighborhoods = load_data()["neighborhood"].tolist()
     filtered_neighborhoods = df_filtered["neighborhood"].tolist()
     idx_map = {name: i for i, name in enumerate(full_neighborhoods)}
@@ -230,34 +236,33 @@ try:
 
     if filtered_indices:
         filtered_embeddings = all_embeddings[filtered_indices]
-
-        # Embed the user query
         query_embedding = embed_texts([soft_query])[0]
-
-        # Compute cosine similarity
         sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
-        # Normalize scores for blending
-        def minmax(arr: np.ndarray) -> np.ndarray:
-            mn, mx = arr.min(), arr.max()
-            return (arr - mn) / (mx - mn + 1e-12)
+        keep_names = [n for n in filtered_neighborhoods if n in idx_map]
+        if "commercial_activity_score" not in df_filtered.columns:
+            raise KeyError("Column commercial_activity_score missing from feature table.")
 
-        sim_norm = minmax(sim_scores)
+        act_scores = np.array(
+            [
+                float(df_filtered.loc[df_filtered["neighborhood"] == n, "commercial_activity_score"].iloc[0])
+                for n in keep_names
+            ],
+            dtype=float,
+        )
 
-        # Normalize commercial activity for the beta weight
-        comm_scores = df_filtered.iloc[[
-            filtered_neighborhoods.index(n)
-            for n in [filtered_neighborhoods[i] for i in range(len(filtered_indices))]
-        ]]["commercial_activity_score"].values.astype(float)
-        comm_norm = minmax(comm_scores)
+        X = np.column_stack([sim_scores.astype(float), act_scores])
+        if X.shape[0] == 1:
+            scores_scaled = np.ones((1, 2)) * 0.5
+        else:
+            scores_scaled = MinMaxScaler().fit_transform(X)
 
-        # Blend
-        final_scores = alpha * sim_norm + beta * comm_norm
+        final_scores = scores_scaled @ _w
 
         ranking_df = pd.DataFrame({
-            "neighborhood": [filtered_neighborhoods[i] for i in range(len(filtered_indices))],
+            "neighborhood": keep_names,
             "semantic_similarity": sim_scores.round(4),
-            "commercial_activity": comm_scores.round(0).astype(int),
+            "commercial_activity_score": act_scores.round(0).astype(int),
             "blended_score": final_scores.round(4),
         }).sort_values("blended_score", ascending=False).reset_index(drop=True)
 
@@ -326,10 +331,12 @@ with col2:
         "| `subway_station_count` | Transit access |\n"
         "| `poi_density_per_km2` | Density descriptor |\n"
         "| `commercial_activity_score` | Activity level |\n"
-        "| `transit_activity_score` | Transit activity |"
+        "| `transit_activity_score` | Transit activity |\n"
+        "| *Blended* | MinMax([semantic, commercial_activity]) then α·semantic + (1−α)·activity |"
     )
 
 st.markdown(
-    "**Pipeline**: Hard filters (sidebar) \u2192 DuckDB SQL query \u2192 filtered rows \u2192 "
-    "semantic similarity (OpenAI embeddings) + Claude agentic analysis (tool-use SQL) \u2192 ranked results."
+    "**Pipeline**: Hard filters \u2192 DuckDB SQL \u2192 MinMaxScaler on "
+    "[cosine semantic, commercial_activity_score] \u2192 "
+    "α·col0 + β·col1 (β = 1 − α) \u2192 optional Claude SQL analysis."
 )

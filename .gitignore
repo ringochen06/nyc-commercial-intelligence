@@ -1,6 +1,12 @@
 .venv/
 venv/
 __pycache__/
+
+# Secrets & local environment (template stays tracked)
+.env
+.env.*
+!.env.example
+.envrc
 *.py[cod]
 .pytest_cache/
 .ruff_cache/

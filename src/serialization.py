@@ -1,8 +1,9 @@
 import joblib
 import pandas as pd
-from transformers import Any
+from typing import Any
 from pathlib import Path
 import numpy as np
+
 
 
 
@@ -39,6 +40,9 @@ def load_figure(path: Path) -> Any:
 def save_numpy(array: Any, path: Path) -> None:
     """Save NumPy array to file."""
     np.save(path, array)
+def save_multiple_numpy(arrays: dict[str, Any], path: Path) -> None:
+    """Save multiple NumPy arrays to a single file (e.g. with np.savez)."""
+    np.savez(path, **arrays)
 
 def load_numpy(path: Path) -> Any:
     """Load NumPy array from file."""

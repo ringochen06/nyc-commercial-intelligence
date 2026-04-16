@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +40,41 @@ def entropy_from_counts(values: np.ndarray) -> float:
         return 0.0
     p = values[values > 0] / total
     return float(-(p * np.log(p)).sum())
+
+
+def normalize_cdta_join_key(cd: str | float | None) -> Optional[str]:
+    """
+    Map Community District / CDTA-style strings to DCP CDTA2020-style keys (e.g. MN01, BK18).
+
+    Handles:
+    - Already-normal 4-char codes (MN1 -> MN01)
+    - Long labels containing a borough token + district number
+    - NYC 3-digit Geosupport codes (101 -> Manhattan CD 1 -> MN01)
+    """
+    if cd is None or (isinstance(cd, float) and pd.isna(cd)):
+        return None
+    s = str(cd).strip().upper()
+    if not s or s == "NAN":
+        return None
+
+    if re.fullmatch(r"\d{3}", s):
+        boro_digit, dist_str = s[0], s[1:3]
+        bmap = {"1": "MN", "2": "BX", "3": "BK", "4": "QN", "5": "SI"}
+        pref = bmap.get(boro_digit)
+        if pref is None:
+            return None
+        dist = int(dist_str)
+        if dist < 1:
+            return None
+        return f"{pref}{dist:02d}"
+
+    m = re.match(r"^(BX|BK|MN|QN|SI)\s*0*(\d{1,2})$", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    m = re.search(r"(BX|BK|MN|QN|SI)\s*0*(\d{1,2})\b", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    return None
 
 
 # =========================================================
@@ -275,6 +312,43 @@ def merge_all_features(
     for other in [poi_feat, ped_feat, subway_feat]:
         df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
 
+    # Neighborhood profile (MOCEJ / Planning-style CSV + optional NFH), keyed by CD ~ CDTA2020.
+    # Unmatched CDTAs get NaN on merge; we impute numeric profile columns below (borough then city median).
+    df["_cd_join"] = df["cd"].map(normalize_cdta_join_key)
+    nb = nbhd_clean.copy()
+    nb["_cd_join"] = nb["cd"].map(normalize_cdta_join_key)
+    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(subset=["_cd_join"], keep="first")
+    profile_cols = [
+        c
+        for c in nb.columns
+        if c not in ("neighborhood", "borough", "cd", "_cd_join")
+    ]
+    if profile_cols:
+        n_with_key = df["_cd_join"].notna().sum()
+        df = df.merge(nb[["_cd_join"] + profile_cols], on="_cd_join", how="left")
+        probe = profile_cols[0]
+        n_matched = int(df[probe].notna().sum()) if probe in df.columns else 0
+        if n_with_key > 0 and n_matched < n_with_key * 0.5:
+            warnings.warn(
+                "Less than half of rows with a parsed CD code matched neighborhood profile data. "
+                "Check that raw `Community District` values align with CDTA2020 (see normalize_cdta_join_key).",
+                stacklevel=2,
+            )
+    df = df.drop(columns=["_cd_join"])
+
+    # All merged profile columns (MOCEJ counts/income/commute/education, derived pct/totals, nfh_*):
+    # borough median then citywide median for remaining NaN (proxy where join missed a CD row).
+    for col in profile_cols:
+        if col not in df.columns:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if df["borough"].notna().any():
+            borough_med = df.groupby("borough")[col].transform("median")
+            df[col] = df[col].fillna(borough_med)
+        gmed = df[col].median()
+        if pd.notna(gmed):
+            df[col] = df[col].fillna(gmed)
+
     # density features
     if "area_km2" in df.columns:
         if "total_poi" in df.columns:
@@ -286,18 +360,7 @@ def merge_all_features(
         if "subway_station_count" in df.columns:
             df["subway_density_per_km2"] = safe_divide(df["subway_station_count"], df["area_km2"])
 
-    # interaction features
-    if {"avg_pedestrian", "total_poi"}.issubset(df.columns):
-        df["commercial_activity_score"] = (
-            df["avg_pedestrian"].fillna(0) * df["total_poi"].fillna(0)
-        )
-
-    if {"subway_station_count", "avg_pedestrian"}.issubset(df.columns):
-        df["transit_activity_score"] = (
-            df["subway_station_count"].fillna(0) * df["avg_pedestrian"].fillna(0)
-        )
-
-    # ========= POI =========
+    # ========= POI / retail / subway / pedestrian (before activity scores) =========
     for col in [
         "total_poi",
         "unique_poi",
@@ -311,23 +374,27 @@ def merge_all_features(
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    # ========= retail =========
     for col in ["num_retail", "ratio_retail", "retail_density_per_km2"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    # ========= subway =========
     for col in ["subway_station_count", "subway_density_per_km2"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    # ========= pedestrian =========
     for col in ["avg_pedestrian", "peak_pedestrian"]:
         if col in df.columns:
-            df[col] = df[col].fillna(df[col].mean())
+            df[col] = df[col].fillna(df[col].mean()).fillna(0)
 
     if "pedestrian_count_points" in df.columns:
         df["pedestrian_count_points"] = df["pedestrian_count_points"].fillna(0)
+
+    # interaction features (after POI / subway / pedestrian fills so products are not stuck at 0)
+    if {"avg_pedestrian", "total_poi"}.issubset(df.columns):
+        df["commercial_activity_score"] = df["avg_pedestrian"] * df["total_poi"]
+
+    if {"subway_station_count", "avg_pedestrian"}.issubset(df.columns):
+        df["transit_activity_score"] = df["subway_station_count"] * df["avg_pedestrian"]
 
     return df
 

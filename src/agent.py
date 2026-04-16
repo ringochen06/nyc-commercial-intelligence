@@ -36,7 +36,10 @@ TOOLS: list[dict[str, Any]] = [
             "category_diversity, num_retail, food, other, retail, ratio_retail, "
             "category_entropy, avg_pedestrian, peak_pedestrian, pedestrian_count_points, "
             "subway_station_count, poi_density_per_km2, retail_density_per_km2, "
-            "subway_density_per_km2, commercial_activity_score, transit_activity_score. "
+            "subway_density_per_km2, commercial_activity_score, transit_activity_score, "
+            "and neighborhood profile fields when present (e.g. median_household_income, "
+            "pct_bachelors_plus, commute_public_transit, food_services, total_businesses, "
+            "pct_hispanic, pct_black, pct_asian). "
             "Only SELECT statements are allowed."
         ),
         "input_schema": {

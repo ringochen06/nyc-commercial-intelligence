@@ -9,6 +9,7 @@ processed = run_data_processing(
     restaurant_path="data/raw/DOHMH_New_York_City_Restaurant_Inspection_Results_20260329.csv",
     license_path="data/raw/legally-operating-businesses-nyc.csv",
     nbhd_path="data/raw/Public - Neighborhood Profiles 2018 - All.csv",
+    nfh_path="data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool_20260415.csv",
     output_dir="data/processed"
 )
 
@@ -34,8 +35,13 @@ df_final.to_csv("data/processed/neighborhood_features_final.csv", index=False)
 
 print("Feature engineering finished.")
 print("Final feature table shape:", df_final.shape)
-print("\nMissing values:")
-print(df_final.isna().sum().sort_values(ascending=False).head(15))
+na_counts = df_final.isna().sum()
+na_cols = na_counts[na_counts > 0].sort_values(ascending=False)
+if len(na_cols):
+    print("\nNaN counts (investigate before shipping):")
+    print(na_cols.head(20))
+else:
+    print("\nNo missing values in the final table.")
 
 print("\nPreview:")
 print(df_final.head())

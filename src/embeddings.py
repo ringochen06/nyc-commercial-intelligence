@@ -118,7 +118,7 @@ def build_text_profile(row: pd.Series) -> str:
         f"{name} in {borough}. "
         f"CDTA area about {area_km2} km2. "
         f"{total_poi} points of interest with {biz_density} business density ({density}/km2). "
-        f"Retail license POI density {retail_d}/km2; food-category POI density {food_d}/km2. "
+        f"Retail-category POI density {retail_d}/km2; food-category POI density {food_d}/km2. "
         f"{mix_txt}"
         f"Business category diversity is {diversity} (entropy {entropy}). "
         f"{foot_traffic} foot traffic (avg {ped} pedestrians). "

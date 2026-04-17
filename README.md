@@ -103,7 +103,7 @@ A button sends **Claude** a prompt with the soft query and the **hard-filtered**
 ```
 data/        raw and processed datasets (see data/*/README*)
 src/         core logic (pipeline, features, embeddings, agent)
-pages/       e.g. `Ranking.py` (soft ranker)
+pages/       `Ranking.py` only (soft ranker; **K-Selection lives in `app.py`**)
 scripts/     optional maintenance scripts (e.g. imputation audit)
 outputs/     saved models, embeddings, figures
 tests/       unit tests (`pytest tests/`)
@@ -170,7 +170,7 @@ K-means is implemented from scratch in `src/kmeans_numpy.py` (Euclidean distance
 pytest tests/
 ```
 
-Includes **K-means** tests (`tests/test_kmeans.py`). Optional scripts under **`scripts/`** (e.g. imputation audit) are not run by CI.
+Includes **`tests/test_kmeans.py`** and **`tests/test_feature_engineering.py`**. Optional scripts under **`scripts/`** (e.g. imputation audit) are not run by CI.
 
 ---
 

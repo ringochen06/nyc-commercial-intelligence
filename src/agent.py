@@ -33,7 +33,7 @@ TOOLS: list[dict[str, Any]] = [
             "Execute a read-only DuckDB SQL query against the table `neighborhoods`. "
             "The table contains one row per NYC neighborhood with columns: "
             "neighborhood, cd, borough, area_km2, total_poi, unique_poi, "
-            "category_diversity, num_retail, food, other, retail, ratio_retail, "
+            "category_diversity, food, retail, other, ratio_retail, ratio_restaurant, "
             "category_entropy, avg_pedestrian, peak_pedestrian, pedestrian_count_points, "
             "subway_station_count, poi_density_per_km2, retail_density_per_km2, "
             "subway_density_per_km2, commercial_activity_score, transit_activity_score, "

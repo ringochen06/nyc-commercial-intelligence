@@ -88,12 +88,11 @@ Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood 
 
 ## Final Feature Table
 
-### `neighborhood_features.csv` and `neighborhood_features_final.csv`
+### `neighborhood_features_final.csv`
 
-- **`neighborhood_features.csv`** — written by `run_feature_engineering()` in `src/feature_engineering.py`.
-- **`neighborhood_features_final.csv`** — same table, saved again by `run_pipeline.py` as the default input for **`app.py`** and **`src/embeddings.py`**.
+- Written once by **`run_feature_engineering()`** in `src/feature_engineering.py` (also invoked from **`run_pipeline.py`**). This is the only merged feature table **`app.py`**, **`pages/Ranking.py`**, and **`src/embeddings.py`** read.
 
-Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows × ~57 columns** (exact counts depend on boundary file and which optional columns exist in `nbhd_clean`).
+Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows** (exact column count depends on optional NFH columns and pipeline version).
 
 **Not in this table:** There is **no** `persistence_score` column in the current pipeline; the app blends **semantic similarity** and **`commercial_activity_score`** only (see below).
 
@@ -115,8 +114,9 @@ Sources integrated:
 
 **Retail and Category Structure**
 
-- `num_retail`, `retail`, `food`, `other`
-- `ratio_retail`, `retail_density_per_km2`, `food_density_per_km2` (`food` count ÷ `area_km2`)
+- **`food`**, **`retail`**, **`other`**: per-CDTA counts from `simplify_category` in `src/feature_engineering.py` (grounded in `poi_type`: DOHMH = restaurant, licenses = retail). Under current rules these align with former `num_restaurant` / `num_retail` counts, so **only the simplified columns are exported** (no duplicate `num_*` columns).
+- **`ratio_restaurant`** (= `food` / `total_poi`) and **`ratio_retail`** (= `retail` / `total_poi`); **`food_to_retail_ratio`**
+- **`retail_density_per_km2`**, **`food_density_per_km2`** (per km² of CDTA area)
 
 **Pedestrian Activity**
 

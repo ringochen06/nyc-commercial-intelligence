@@ -84,10 +84,8 @@ def main() -> None:
     if "area_km2" in df.columns:
         if "total_poi" in df.columns:
             df["poi_density_per_km2"] = safe_divide(df["total_poi"], df["area_km2"])
-        if "num_restaurant" in df.columns:
-            df["restaurant_density_per_km2"] = safe_divide(df["num_restaurant"], df["area_km2"])
-        if "num_retail" in df.columns:
-            df["retail_density_per_km2"] = safe_divide(df["num_retail"], df["area_km2"])
+        if "retail" in df.columns:
+            df["retail_density_per_km2"] = safe_divide(df["retail"], df["area_km2"])
         if "food" in df.columns:
             df["food_density_per_km2"] = safe_divide(df["food"], df["area_km2"])
         if "subway_station_count" in df.columns:
@@ -97,7 +95,6 @@ def main() -> None:
         c
         for c in [
             "poi_density_per_km2",
-            "restaurant_density_per_km2",
             "retail_density_per_km2",
             "food_density_per_km2",
             "subway_density_per_km2",
@@ -119,7 +116,7 @@ def main() -> None:
         "retail",
     ]
     poi_like_cols = [c for c in poi_like_cols if c in df.columns]
-    retail_extra = ["num_retail", "ratio_retail", "retail_density_per_km2", "food_density_per_km2"]
+    retail_extra = ["ratio_retail", "retail_density_per_km2", "food_density_per_km2"]
     retail_extra = [c for c in retail_extra if c in df.columns]
     subway_cols = [c for c in ["subway_station_count", "subway_density_per_km2"] if c in df.columns]
 

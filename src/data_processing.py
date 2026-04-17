@@ -24,23 +24,25 @@ BOROUGH_MAP = {
 def standardize_borough(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip().str.upper()
 
-    s = s.replace({
-        "MN": "MANHATTAN",
-        "M": "MANHATTAN",
-        "BX": "BRONX",
-        "X": "BRONX",
-        "BK": "BROOKLYN",
-        "B": "BROOKLYN",
-        "QN": "QUEENS",
-        "Q": "QUEENS",
-        "SI": "STATEN ISLAND",
-        "S": "STATEN ISLAND",
-        "STATEN ISLA": "STATEN ISLAND",
-        "MANHATTAN ": "MANHATTAN",
-        "BROOKLYN ": "BROOKLYN",
-        "QUEENS ": "QUEENS",
-        "BRONX ": "BRONX",
-    })
+    s = s.replace(
+        {
+            "MN": "MANHATTAN",
+            "M": "MANHATTAN",
+            "BX": "BRONX",
+            "X": "BRONX",
+            "BK": "BROOKLYN",
+            "B": "BROOKLYN",
+            "QN": "QUEENS",
+            "Q": "QUEENS",
+            "SI": "STATEN ISLAND",
+            "S": "STATEN ISLAND",
+            "STATEN ISLA": "STATEN ISLAND",
+            "MANHATTAN ": "MANHATTAN",
+            "BROOKLYN ": "BROOKLYN",
+            "QUEENS ": "QUEENS",
+            "BRONX ": "BRONX",
+        }
+    )
 
     return s
 
@@ -60,7 +62,7 @@ def clean_numeric_string(series: pd.Series) -> pd.Series:
         .str.replace("$", "", regex=False)
         .str.replace("%", "", regex=False)
         .str.strip(),
-        errors="coerce"
+        errors="coerce",
     )
 
 
@@ -112,18 +114,25 @@ def normalize_cd_code(cd: str | float | None) -> Optional[str]:
 # 1. Pedestrian counts
 # =========================================================
 
+
 def clean_pedestrian_data(ped_path: str | Path) -> pd.DataFrame:
     df_ped = pd.read_csv(ped_path)
 
     if "the_geom" in df_ped.columns:
         geom = df_ped["the_geom"].astype(str)
-        lon = pd.to_numeric(geom.str.extract(r"POINT \((-?\d+\.\d+)")[0], errors="coerce")
-        lat = pd.to_numeric(geom.str.extract(r"POINT \(-?\d+\.\d+ (\d+\.\d+)\)")[0], errors="coerce")
+        lon = pd.to_numeric(
+            geom.str.extract(r"POINT \((-?\d+\.\d+)")[0], errors="coerce"
+        )
+        lat = pd.to_numeric(
+            geom.str.extract(r"POINT \(-?\d+\.\d+ (\d+\.\d+)\)")[0], errors="coerce"
+        )
     else:
         lon = pd.to_numeric(df_ped["longitude"], errors="coerce")
         lat = pd.to_numeric(df_ped["latitude"], errors="coerce")
 
-    ped_cols = [col for col in df_ped.columns if "_AM" in col or "_PM" in col or "_MD" in col]
+    ped_cols = [
+        col for col in df_ped.columns if "_AM" in col or "_PM" in col or "_MD" in col
+    ]
     if ped_cols:
         avg_ped = df_ped[ped_cols].mean(axis=1)
         peak_ped = df_ped[ped_cols].max(axis=1)
@@ -141,18 +150,24 @@ def clean_pedestrian_data(ped_path: str | Path) -> pd.DataFrame:
         index=df_ped.index,
     )
     drop_lon_lat = [c for c in ("longitude", "latitude") if c in df_ped.columns]
-    df_ped = pd.concat([df_ped.drop(columns=drop_lon_lat, errors="ignore"), derived], axis=1)
+    df_ped = pd.concat(
+        [df_ped.drop(columns=drop_lon_lat, errors="ignore"), derived], axis=1
+    )
 
-    keep_cols = [c for c in [
-        "Borough",
-        "Street",
-        "From",
-        "To",
-        "latitude",
-        "longitude",
-        "avg_pedestrian",
-        "peak_pedestrian"
-    ] if c in df_ped.columns]
+    keep_cols = [
+        c
+        for c in [
+            "Borough",
+            "Street",
+            "From",
+            "To",
+            "latitude",
+            "longitude",
+            "avg_pedestrian",
+            "peak_pedestrian",
+        ]
+        if c in df_ped.columns
+    ]
 
     df = df_ped[keep_cols].copy()
 
@@ -176,6 +191,7 @@ def clean_pedestrian_data(ped_path: str | Path) -> pd.DataFrame:
 # =========================================================
 # 2. Subway station data
 # =========================================================
+
 
 def clean_subway_data(subway_path: str | Path) -> pd.DataFrame:
     df_subway = pd.read_csv(subway_path)
@@ -211,30 +227,42 @@ def clean_subway_data(subway_path: str | Path) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["station_name", "latitude", "longitude"])
 
     return df.reset_index(drop=True)
+
+
 # =========================================================
 # 3. Restaurant POI
 # =========================================================
 
+
 def clean_restaurant_data(restaurant_path: str | Path) -> pd.DataFrame:
     df_rest = pd.read_csv(restaurant_path)
-
 
     name_col = "DBA" if "DBA" in df_rest.columns else "dba"
     borough_col = "BORO" if "BORO" in df_rest.columns else "boro"
     lat_col = "Latitude" if "Latitude" in df_rest.columns else "latitude"
     lon_col = "Longitude" if "Longitude" in df_rest.columns else "longitude"
-    cuisine_col = "CUISINE DESCRIPTION" if "CUISINE DESCRIPTION" in df_rest.columns else "cuisine description"
+    cuisine_col = (
+        "CUISINE DESCRIPTION"
+        if "CUISINE DESCRIPTION" in df_rest.columns
+        else "cuisine description"
+    )
 
-    keep_cols = [c for c in [name_col, cuisine_col, borough_col, lat_col, lon_col] if c in df_rest.columns]
+    keep_cols = [
+        c
+        for c in [name_col, cuisine_col, borough_col, lat_col, lon_col]
+        if c in df_rest.columns
+    ]
     df = df_rest[keep_cols].copy()
 
-    df = df.rename(columns={
-        name_col: "business_name",
-        cuisine_col: "category",
-        borough_col: "borough",
-        lat_col: "latitude",
-        lon_col: "longitude",
-    })
+    df = df.rename(
+        columns={
+            name_col: "business_name",
+            cuisine_col: "category",
+            borough_col: "borough",
+            lat_col: "latitude",
+            lon_col: "longitude",
+        }
+    )
 
     df["borough"] = standardize_borough(df["borough"])
     df["category"] = df["category"].astype(str).str.strip().str.lower()
@@ -245,7 +273,11 @@ def clean_restaurant_data(restaurant_path: str | Path) -> pd.DataFrame:
     df = df[(df["latitude"] != 0) & (df["longitude"] != 0)]
     df = df.drop_duplicates(subset=["business_name", "latitude", "longitude"])
 
-    df["category"] = df["category"].fillna("unknown").astype(str).str.strip().str.lower()
+    df["category"] = (
+        df["category"].fillna("unknown").astype(str).str.strip().str.lower()
+    )
+    # DOHMH rows are food-service inspections; drives `simplify_category` default to food vs other.
+    df["poi_type"] = "restaurant"
     df["description"] = df["category"] + " restaurant in " + df["borough"]
 
     return df.reset_index(drop=True)
@@ -255,52 +287,55 @@ def clean_restaurant_data(restaurant_path: str | Path) -> pd.DataFrame:
 # 4. Retail POI from business licensing
 # =========================================================
 
+
 def clean_retail_data(license_path: str | Path) -> pd.DataFrame:
     df_license = pd.read_csv(license_path)
     df_license["Industry"] = df_license["Industry"].astype(str)
 
     keep_keywords = [
-    "store",
-    "retail",
-    "dealer",
-    "shop",
-    "electronics",
-    "tobacco",
-    "secondhand",
-    "market",
-    "grocery",
-    "pharmacy",
-    "apparel",
-    "clothing",
-    "jewelry",
-    "furniture",
-    "gift",
-    "beauty",
-    "cosmetics",
-    "hardware",
-    "home"
+        "store",
+        "retail",
+        "dealer",
+        "shop",
+        "electronics",
+        "tobacco",
+        "secondhand",
+        "market",
+        "grocery",
+        "pharmacy",
+        "apparel",
+        "clothing",
+        "jewelry",
+        "furniture",
+        "gift",
+        "beauty",
+        "cosmetics",
+        "hardware",
+        "home",
     ]
     df = df_license[
-        (df_license["License Type"] == "Business") &
-        (df_license["License Status"] == "Active") &
-        (df_license["Industry"].str.contains("|".join(keep_keywords), case=False, na=False))
+        (df_license["License Type"] == "Business")
+        & (df_license["License Status"] == "Active")
+        & (
+            df_license["Industry"].str.contains(
+                "|".join(keep_keywords), case=False, na=False
+            )
+        )
     ].copy()
 
-    df = df[[
-        "Business Name",
-        "Industry",
-        "Address Borough",
-        "Latitude",
-        "Longitude"
-    ]].copy()
+    df = df[
+        ["Business Name", "Industry", "Address Borough", "Latitude", "Longitude"]
+    ].copy()
 
-    df = df.rename(columns={
-        "Business Name": "business_name",
-        "Industry": "category",
-        "Address Borough": "borough",
-        "Latitude": "latitude",
-        "Longitude": "longitude"
-    })
+    df = df.rename(
+        columns={
+            "Business Name": "business_name",
+            "Industry": "category",
+            "Address Borough": "borough",
+            "Latitude": "latitude",
+            "Longitude": "longitude",
+        }
+    )
 
     df["borough"] = standardize_borough(df["borough"])
     df["category"] = df["category"].astype(str).str.strip().str.lower()
@@ -318,7 +353,9 @@ def clean_retail_data(license_path: str | Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def build_poi_table(restaurant_path: str | Path, license_path: str | Path) -> pd.DataFrame:
+def build_poi_table(
+    restaurant_path: str | Path, license_path: str | Path
+) -> pd.DataFrame:
     df_rest = clean_restaurant_data(restaurant_path)
     df_retail = clean_retail_data(license_path)
     df_poi = pd.concat([df_rest, df_retail], ignore_index=True)
@@ -328,6 +365,7 @@ def build_poi_table(restaurant_path: str | Path, license_path: str | Path) -> pd
 # =========================================================
 # 5. Neighborhood profile data
 # =========================================================
+
 
 def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
     """
@@ -390,28 +428,30 @@ def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
     goals["IndexScore"] = clean_numeric_string(goals["IndexScore"])
     goals["GoalRank"] = clean_numeric_string(goals["GoalRank"])
 
-    score_wide = (
-        goals.pivot_table(index="cd", columns="metric", values="IndexScore", aggfunc="first")
-        .reset_index()
-    )
+    score_wide = goals.pivot_table(
+        index="cd", columns="metric", values="IndexScore", aggfunc="first"
+    ).reset_index()
     score_wide = score_wide.rename(
         columns={c: f"{c}_score" for c in score_wide.columns if c != "cd"}
     )
 
-    rank_wide = (
-        goals.pivot_table(index="cd", columns="metric", values="GoalRank", aggfunc="first")
-        .reset_index()
-    )
+    rank_wide = goals.pivot_table(
+        index="cd", columns="metric", values="GoalRank", aggfunc="first"
+    ).reset_index()
     rank_wide = rank_wide.rename(
         columns={c: f"{c}_rank" for c in rank_wide.columns if c != "cd"}
     )
 
-    out = base.merge(score_wide, on="cd", how="left").merge(rank_wide, on="cd", how="left")
+    out = base.merge(score_wide, on="cd", how="left").merge(
+        rank_wide, on="cd", how="left"
+    )
     out = out.drop(columns=["CD"], errors="ignore")
     return out.reset_index(drop=True)
 
 
-def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | None = None) -> pd.DataFrame:
+def clean_neighborhood_profiles(
+    nbhd_path: str | Path, nfh_path: str | Path | None = None
+) -> pd.DataFrame:
     df_nbhd = pd.read_csv(nbhd_path)
 
     keep_cols = [
@@ -433,22 +473,24 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
 
     df = df_nbhd[keep_cols].copy()
 
-    df = df.rename(columns={
-        "Neighborhoods": "neighborhood",
-        "Community District": "cd",
-        "2016 Construction": "construction_jobs",
-        "2016 Manufacturing": "manufacturing_jobs",
-        "2016 Wholesale Trade": "wholesale_jobs",
-        "2016 Black": "pop_black",
-        "2016 Hispanic": "pop_hispanic",
-        "2016 Asian": "pop_asian",
-        "2016 Food Services and Drinking Places": "food_services",
-        "2016 Total Number of Businesses": "total_businesses",
-        "2016 Median Household Income": "median_household_income",
-        "2016 Employed": "employed_2016",
-        "2016 Commute via Public Transit": "commute_public_transit",
-        "2016 Percentage of Population with Bachelor's or Higher": "pct_bachelors_plus",
-    })
+    df = df.rename(
+        columns={
+            "Neighborhoods": "neighborhood",
+            "Community District": "cd",
+            "2016 Construction": "construction_jobs",
+            "2016 Manufacturing": "manufacturing_jobs",
+            "2016 Wholesale Trade": "wholesale_jobs",
+            "2016 Black": "pop_black",
+            "2016 Hispanic": "pop_hispanic",
+            "2016 Asian": "pop_asian",
+            "2016 Food Services and Drinking Places": "food_services",
+            "2016 Total Number of Businesses": "total_businesses",
+            "2016 Median Household Income": "median_household_income",
+            "2016 Employed": "employed_2016",
+            "2016 Commute via Public Transit": "commute_public_transit",
+            "2016 Percentage of Population with Bachelor's or Higher": "pct_bachelors_plus",
+        }
+    )
 
     numeric_cols = [
         "construction_jobs",
@@ -484,15 +526,15 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
     df = df.drop_duplicates(subset=["cd"])
 
     df["total_jobs"] = (
-        df["construction_jobs"].fillna(0) +
-        df["manufacturing_jobs"].fillna(0) +
-        df["wholesale_jobs"].fillna(0)
+        df["construction_jobs"].fillna(0)
+        + df["manufacturing_jobs"].fillna(0)
+        + df["wholesale_jobs"].fillna(0)
     )
 
     df["total_population_proxy"] = (
-        df["pop_black"].fillna(0) +
-        df["pop_hispanic"].fillna(0) +
-        df["pop_asian"].fillna(0)
+        df["pop_black"].fillna(0)
+        + df["pop_hispanic"].fillna(0)
+        + df["pop_asian"].fillna(0)
     )
 
     denom = df["total_population_proxy"].replace(0, np.nan)
@@ -517,6 +559,7 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
 # =========================================================
 # 6. Save everything
 # =========================================================
+
 
 def run_data_processing(
     *,

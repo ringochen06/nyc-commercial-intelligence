@@ -2,7 +2,6 @@ from src.data_processing import run_data_processing
 from src.feature_engineering import run_feature_engineering
 
 print("Step 1: running data processing...")
-
 processed = run_data_processing(
     pedestrian_path="data/raw/Bi-Annual_Pedestrian_Counts.csv",
     subway_path="data/raw/MTA_Subway_Stations_20260329.csv",
@@ -28,7 +27,9 @@ outputs = run_feature_engineering(
     nbhd_clean_path="data/processed/nbhd_clean.csv",
     boundary_path="data/raw/nyc_boundaries/nycdta2020.shp",
     output_dir="data/processed"
+
 )
+print(f"poi output: {outputs.get("poi_features").columns.tolist()}")
 
 # `neighborhood_features_final.csv` is written inside `run_feature_engineering`.
 df_final = outputs["neighborhood_features"]

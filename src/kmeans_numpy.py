@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 from pathlib import Path
+import hashlib
 
 try:
     from . import serialization
@@ -17,6 +18,12 @@ except ImportError:
     import serialization
 
 CLUSTER_PATH = Path("outputs/clusters/")
+
+def _features_hash(features: list[str]) -> str:
+    """Generate a short hash from a sorted list of feature names."""
+    sorted_features = sorted(features)
+    combined = "|".join(sorted_features)
+    return hashlib.md5(combined.encode()).hexdigest()[:8]
 
 def pairwise_squared_euclidean(X: np.ndarray, C: np.ndarray) -> np.ndarray:
     """Squared Euclidean distances between rows of X (n, d) and rows of C (k, d) -> (n, k)."""
@@ -57,6 +64,58 @@ def kmeans(
 
     return z, centroids, i + 1
 
+def kmeans_with_caching(
+    features: list[str],
+    X: np.ndarray,
+    k: int,
+    *,
+    max_iter: int = 100,
+    tol: float = 1e-4,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Run kmeans with caching to avoid recomputation during development.
+    
+    Caches results in HDF5 file per k, with datasets keyed by feature hash.
+    Allows appending results for different feature selections within the same k.
+    
+    Parameters
+    ----------
+    features : list[str]
+        Feature names used for clustering (used to generate cache key).
+    X : np.ndarray
+        Feature matrix (n, d).
+    k : int
+        Number of clusters.
+    max_iter : int
+        Maximum iterations for K-means.
+    tol : float
+        Convergence tolerance.
+    random_state : int | None
+        Random seed for reproducibility.
+    
+    Returns
+    -------
+    labels : np.ndarray
+        Cluster labels (n,).
+    centroids : np.ndarray
+        Cluster centroids (k, d).
+    n_iter : int
+        Number of iterations run (0 if loaded from cache).
+    """
+    CLUSTER_PATH.mkdir(parents=True, exist_ok=True)
+    cache_file = CLUSTER_PATH / f"kmeans_k{k}.h5"
+    
+    # Try to load from cache
+    try:
+        labels, centroids = load_kmeans_results(k, features, cache_file)
+        return labels, centroids, 0  # 0 iterations indicates loaded from cache
+    except (FileNotFoundError, KeyError):
+        pass  # Cache miss, proceed with computation
+    
+    # Compute new results
+    labels, centroids, n_iter = kmeans(X, k, max_iter=max_iter, tol=tol, random_state=random_state)
+    save_kmeans_results(k, features, labels, centroids, cache_file)
+    return labels, centroids, n_iter
 
 def assign_labels(X: np.ndarray, centroids: np.ndarray) -> np.ndarray:
     """Assign each row of X to nearest centroid index (0 to k-1) based on squared Euclidean distance. Labels should be shape (n,)."""
@@ -173,12 +232,43 @@ def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
 
 
 
-def save_kmeans_results(labels: np.ndarray, centroids: np.ndarray, path: str) -> None:
-    """Persist clustering results (e.g. with NumPy's save or joblib)."""
-    serialization.save_multiple_numpy({"labels": labels, "centroids": centroids}, path)
+def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, path: Path | str) -> None:
+    """Persist clustering results to HDF5 file with features-based key.
+    
+    Each feature selection is stored as a separate dataset group in the same k file,
+    allowing multiple feature sets to coexist for the same k value.
+    """
+    path = Path(path) if isinstance(path, str) else path
+    feat_key = _features_hash(features)
+    
+    data = {
+        f"features_{feat_key}": np.array(features, dtype=object),
+        f"labels_{feat_key}": labels,
+        f"centroids_{feat_key}": centroids,
+    }
+    serialization.save_hdf5_dict(data, path)
 
-def load_kmeans_results(path: str) -> tuple[np.ndarray, np.ndarray]:
-    """Load persisted clustering results."""
-    data = serialization.load_numpy(path)
-    return data["labels"], data["centroids"]
-
+def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[np.ndarray, np.ndarray]:
+    """Load persisted clustering results from HDF5 file by k and features.
+    
+    Returns labels and centroids matching the exact feature set.
+    Raises KeyError if the feature combination is not found in the file.
+    """
+    path = Path(path) if isinstance(path, str) else path
+    feat_key = _features_hash(features)
+    
+    if not path.exists():
+        raise FileNotFoundError(f"Cluster cache file not found: {path}")
+    
+    data = serialization.load_hdf5_dict(path)
+    
+    labels_key = f"labels_{feat_key}"
+    centroids_key = f"centroids_{feat_key}"
+    
+    if labels_key not in data or centroids_key not in data:
+        raise KeyError(
+            f"No cached results for k={k} with features {features}. "
+            f"Available keys in {path}: {list(data.keys())}"
+        )
+    
+    return data[labels_key], data[centroids_key]

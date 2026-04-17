@@ -358,6 +358,10 @@ def build_poi_features(poi_joined: pd.DataFrame) -> pd.DataFrame:
     feat["ratio_retail"] = safe_divide(feat["retail"], feat["total_poi"])
     feat["food_to_retail_ratio"] = safe_divide(feat["food"], feat["retail"]).fillna(0.0)
 
+    # ratio of food (restaurant-type) businesses to total POI
+    if "food" in feat.columns:
+        feat["ratio_food"] = safe_divide(feat["food"], feat["total_poi"])
+
     # entropy
     category_cols = [c for c in ["food", "retail", "other"] if c in feat.columns]
     if category_cols:
@@ -494,6 +498,7 @@ def merge_all_features(
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
+<<<<<<< Updated upstream
     for col in [
         "ratio_retail",
         "ratio_restaurant",
@@ -501,6 +506,9 @@ def merge_all_features(
         "retail_density_per_km2",
         "food_density_per_km2",
     ]:
+=======
+    for col in ["num_retail", "ratio_food", "ratio_retail", "retail_density_per_km2", "food_density_per_km2"]:
+>>>>>>> Stashed changes
         if col in df.columns:
             df[col] = df[col].fillna(0)
 

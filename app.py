@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from embeddings import cosine_similarity, load_embeddings  # noqa: E402
 from feature_engineering import load_boundaries  # noqa: E402
-from kmeans_numpy import compute_inertia, kmeans, silhouette_score  # noqa: E402
+from kmeans_numpy import compute_inertia, kmeans, kmeans_with_caching, silhouette_score  # noqa: E402
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -45,7 +45,8 @@ CANDIDATE_FEATURES: list[str] = [
     "food_density_per_km2",
     "subway_density_per_km2",
     "ratio_retail",
-    "food",
+    "ratio_food",
+    "food"
 ]
 
 DEFAULT_FEATURES: list[str] = [
@@ -463,7 +464,7 @@ if "ks_k_range" in st.session_state:
         f"Scatter, map, centroid bars, and notes below show all **{viz_k}** clusters."
     )
 
-    viz_labels, viz_centroids, _ = kmeans(X_s, viz_k, random_state=42)
+    viz_labels, viz_centroids, _ = kmeans_with_caching(selected_features, X_s, viz_k, random_state=42)
 
     # Share with Ranking page: neighborhood → cluster id, and per-cluster brief text
     _names_v = df_s["neighborhood"].astype(str).tolist()

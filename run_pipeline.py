@@ -32,6 +32,7 @@ outputs = run_feature_engineering(
 
 # `neighborhood_features_final.csv` is written inside `run_feature_engineering`.
 df_final = outputs["neighborhood_features"]
+df_final.to_csv("data/processed/neighborhood_features_final.csv", index=False)
 
 print("Feature engineering finished.")
 print("Final feature table shape:", df_final.shape)

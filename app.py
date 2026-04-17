@@ -1,13 +1,8 @@
 """
-NYC Commercial Intelligence — Streamlit dashboard.
+K-Selection / Clustering — default Streamlit home page (`streamlit run app.py`).
 
-Hard constraints  : sidebar controls → DuckDB SQL filters (deterministic)
-Soft ranking      : α·semantic + β·commercial_activity
-                    (MinMax-scaled to [0,1] on the filtered set; β = 1 − α from one slider)
-Semantic search   : OpenAI embeddings cosine similarity on neighborhood profiles
-Optional Claude   : read-only SQL on filtered data
-
-Run:  streamlit run app.py
+Runs K-means for k = 2 … max_k, elbow & silhouette charts, maps, and cluster notes.
+Results are stored in session state for the **Ranking** page (neighborhood → cluster + brief).
 """
 
 from __future__ import annotations
@@ -15,52 +10,69 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import duckdb
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
-from dotenv import load_dotenv
-from sklearn.preprocessing import MinMaxScaler
+from plotly.subplots import make_subplots
+from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 
-load_dotenv()
-
-# Ensure src/ is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from agent import run_agent  # noqa: E402
-from embeddings import (  # noqa: E402
-    cosine_similarity,
-    embed_neighborhood_features,
-    embed_texts,
-)
+from embeddings import cosine_similarity, load_embeddings  # noqa: E402
+from feature_engineering import load_boundaries  # noqa: E402
+from kmeans_numpy import compute_inertia, kmeans, silhouette_score  # noqa: E402
 
-DEFAULT_SOFT_QUERY = (
-    "quiet residential area suitable for boutique retail with good subway access"
-)
-DEFAULT_ALPHA_SEMANTIC = 0.8
+# ── Constants ────────────────────────────────────────────────────────────────
 
-# ── Page config ─────────────────────────────────────────────────────────────
+REPO_ROOT = Path(__file__).resolve().parent
+
+DATA_PATH = REPO_ROOT / "data" / "processed" / "neighborhood_features_final.csv"
+
+CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
+
+CANDIDATE_FEATURES: list[str] = [
+    "total_poi",
+    "avg_pedestrian",
+    "subway_station_count",
+    "poi_density_per_km2",
+    "commercial_activity_score",
+    "transit_activity_score",
+    "category_entropy",
+    "unique_poi",
+    "peak_pedestrian",
+    "retail_density_per_km2",
+    "food_density_per_km2",
+    "subway_density_per_km2",
+    "ratio_retail",
+    "food",
+]
+
+DEFAULT_FEATURES: list[str] = [
+    "total_poi",
+    "avg_pedestrian",
+    "subway_station_count",
+    "poi_density_per_km2",
+    "commercial_activity_score",
+    "transit_activity_score",
+    "category_entropy",
+]
+
+# ── Page config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="NYC Commercial Intelligence",
+    page_title="K-Selection · Clustering",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("NYC Commercial Intelligence")
+st.title("K-Selection / Clustering")
 st.caption(
-    "Rank NYC neighborhoods using hard filters (DuckDB SQL), then α·semantic + β·commercial activity "
-    "(MinMax-normalized on the filtered set; one blend slider: β = 1 − α). Optional Claude analysis."
+    "Compare inertia and silhouette across k = 2 … max_k, then explore clusters. "
+    "Run **K-Selection Analysis** to refresh labels used on the **Ranking** page."
 )
 
-# ── Load data ───────────────────────────────────────────────────────────────
-
-DATA_PATH = (
-    Path(__file__).resolve().parent
-    / "data"
-    / "processed"
-    / "neighborhood_features_final.csv"
-)
+# ── Load data ────────────────────────────────────────────────────────────────
 
 
 @st.cache_data
@@ -70,409 +82,628 @@ def load_data() -> pd.DataFrame:
 
 df_full = load_data()
 
-# ── Sidebar: Hard Filters ──────────────────────────────────────────────────
+# ── Sidebar controls ─────────────────────────────────────────────────────────
 
-st.sidebar.header("Hard Filters")
-st.sidebar.caption(
-    "Deterministic constraints applied via DuckDB SQL before the model sees the data."
-)
+st.sidebar.header("Filters & Settings")
 
-# Borough
 boroughs = sorted(df_full["borough"].unique().tolist())
 selected_boroughs = st.sidebar.multiselect(
     "Borough",
     options=boroughs,
     default=boroughs,
-    help="Select one or more boroughs to include.",
+    help="Restrict clustering to selected boroughs.",
 )
 
-# Subway station count
-subway_min, subway_max = int(df_full["subway_station_count"].min()), int(
-    df_full["subway_station_count"].max()
-)
-subway_range = st.sidebar.slider(
-    "Min subway stations",
-    min_value=subway_min,
-    max_value=subway_max,
-    value=subway_min,
-    help="Minimum number of subway stations in the neighborhood.",
+selected_features = st.sidebar.multiselect(
+    "Features for clustering",
+    options=CANDIDATE_FEATURES,
+    default=DEFAULT_FEATURES,
+    help="Numeric columns used to build the feature matrix. "
+    "Features are z-score normalised before K-means runs.",
 )
 
-# Average pedestrian traffic
-ped_min_val = int(df_full["avg_pedestrian"].min())
-ped_max_val = int(df_full["avg_pedestrian"].max())
-ped_threshold = st.sidebar.slider(
-    "Min avg pedestrian count",
-    min_value=ped_min_val,
-    max_value=ped_max_val,
-    value=ped_min_val,
-    help="Minimum average pedestrian foot traffic.",
+max_k = st.sidebar.slider(
+    "Maximum k",
+    min_value=3,
+    max_value=15,
+    value=3,
+    help="Upper bound for the k sweep. Automatically capped at (n_neighborhoods − 1).",
 )
 
-# POI density
-density_min = float(df_full["poi_density_per_km2"].min())
-density_max = float(df_full["poi_density_per_km2"].max())
-density_threshold = st.sidebar.slider(
-    "Min POI density (per km\u00b2)",
-    min_value=density_min,
-    max_value=density_max,
-    value=density_min,
-    step=0.5,
-    help="Minimum points-of-interest per square kilometer.",
+# ── Apply borough filter ─────────────────────────────────────────────────────
+
+if not selected_boroughs:
+    st.warning("Select at least one borough.")
+    st.stop()
+
+df_filtered = df_full[df_full["borough"].isin(selected_boroughs)].copy()
+
+if not selected_features:
+    st.warning("Select at least one feature.")
+    st.stop()
+
+# Drop rows with NaN in any selected feature
+df_clean = df_filtered.dropna(subset=selected_features).reset_index(drop=True)
+n = len(df_clean)
+
+st.markdown(
+    f"**{n}** neighborhoods available after borough filter "
+    f"(out of {len(df_full)} total, {len(df_filtered) - n} dropped for missing values)."
 )
 
-# Total POI
-poi_min = int(df_full["total_poi"].min())
-poi_max = int(df_full["total_poi"].max())
-poi_threshold = st.sidebar.slider(
-    "Min total POI count",
-    min_value=poi_min,
-    max_value=poi_max,
-    value=poi_min,
-    help="Minimum total number of businesses/POIs.",
-)
-
-# Commercial activity score
-comm_min = float(df_full["commercial_activity_score"].min())
-comm_max = float(df_full["commercial_activity_score"].max())
-comm_threshold = st.sidebar.slider(
-    "Min commercial activity score",
-    min_value=comm_min,
-    max_value=comm_max,
-    value=comm_min,
-    step=1000.0,
-    help="Minimum commercial activity score (POI count x pedestrian traffic).",
-)
-
-# Optional NFH filters (available only when NFH columns exist)
-st.sidebar.markdown("---")
-st.sidebar.markdown("**NFH (optional)**")
-
-has_nfh_shocks = "nfh_goal4_fin_shocks_score" in df_full.columns
-use_nfh_goal4_filter = False
-nfh_goal4_threshold = None
-if has_nfh_shocks and df_full["nfh_goal4_fin_shocks_score"].notna().any():
-    nfh_goal4_vals = pd.to_numeric(
-        df_full["nfh_goal4_fin_shocks_score"], errors="coerce"
-    ).dropna()
-    if not nfh_goal4_vals.empty:
-        use_nfh_goal4_filter = st.sidebar.checkbox(
-            "Enable NFH Goal 4 (Financial Shocks)",
-            value=False,
-            help="Apply a minimum threshold on Goal 4: stable housing & capacity to limit financial shocks.",
-        )
-        nfh_goal4_threshold = st.sidebar.slider(
-            "Min NFH Goal 4 score (Financial Shocks)",
-            min_value=float(nfh_goal4_vals.min()),
-            max_value=float(nfh_goal4_vals.max()),
-            value=float(nfh_goal4_vals.min()),
-            step=0.1,
-            help="Higher values indicate stronger financial-shock resilience in this index.",
-            disabled=not use_nfh_goal4_filter,
-        )
-
-has_nfh_overall = "nfh_overall_score" in df_full.columns
-use_nfh_overall_filter = False
-nfh_overall_threshold = None
-if has_nfh_overall and df_full["nfh_overall_score"].notna().any():
-    nfh_overall_vals = pd.to_numeric(
-        df_full["nfh_overall_score"], errors="coerce"
-    ).dropna()
-    if not nfh_overall_vals.empty:
-        use_nfh_overall_filter = st.sidebar.checkbox(
-            "Enable NFH Overall index",
-            value=False,
-            help="Apply a minimum threshold on the combined Neighborhood Financial Health index.",
-        )
-        nfh_overall_threshold = st.sidebar.slider(
-            "Min NFH Overall index score",
-            min_value=float(nfh_overall_vals.min()),
-            max_value=float(nfh_overall_vals.max()),
-            value=float(nfh_overall_vals.min()),
-            step=0.1,
-            help="Higher values indicate stronger overall neighborhood financial health (relative index).",
-            disabled=not use_nfh_overall_filter,
-        )
-
-# ── Apply hard filters with DuckDB ─────────────────────────────────────────
-
-
-def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
-    """Build and execute a DuckDB SQL query from sidebar filter values."""
-    con = duckdb.connect()
-    con.register("nbhd", df)
-
-    borough_list = ", ".join(f"'{b}'" for b in selected_boroughs)
-    sql = f"""
-        SELECT *
-        FROM nbhd
-        WHERE borough IN ({borough_list})
-          AND subway_station_count >= {subway_range}
-          AND avg_pedestrian >= {ped_threshold}
-          AND poi_density_per_km2 >= {density_threshold}
-          AND total_poi >= {poi_threshold}
-          AND commercial_activity_score >= {comm_threshold}
-          {"AND nfh_goal4_fin_shocks_score >= " + str(float(nfh_goal4_threshold)) if (use_nfh_goal4_filter and nfh_goal4_threshold is not None) else ""}
-          {"AND nfh_overall_score >= " + str(float(nfh_overall_threshold)) if (use_nfh_overall_filter and nfh_overall_threshold is not None) else ""}
-        ORDER BY commercial_activity_score DESC
-    """
-
-    result = con.execute(sql).fetchdf()
-    con.close()
-    return result
-
-
-df_filtered = apply_hard_filters(df_full)
-
-# ── Show hard-filter results ────────────────────────────────────────────────
-
-st.subheader(f"Hard-filtered neighborhoods ({len(df_filtered)} of {len(df_full)})")
-
-with st.expander("View generated SQL", expanded=False):
-    borough_list_display = ", ".join(f"'{b}'" for b in selected_boroughs)
-    st.code(
-        f"SELECT * FROM neighborhoods\n"
-        f"WHERE borough IN ({borough_list_display})\n"
-        f"  AND subway_station_count >= {subway_range}\n"
-        f"  AND avg_pedestrian >= {ped_threshold}\n"
-        f"  AND poi_density_per_km2 >= {density_threshold}\n"
-        f"  AND total_poi >= {poi_threshold}\n"
-        f"  AND commercial_activity_score >= {comm_threshold}\n"
-        f"{'  AND nfh_goal4_fin_shocks_score >= ' + str(float(nfh_goal4_threshold)) + chr(10) if (use_nfh_goal4_filter and nfh_goal4_threshold is not None) else ''}"
-        f"{'  AND nfh_overall_score >= ' + str(float(nfh_overall_threshold)) + chr(10) if (use_nfh_overall_filter and nfh_overall_threshold is not None) else ''}"
-        f"ORDER BY commercial_activity_score DESC;",
-        language="sql",
-    )
-
-if df_filtered.empty:
-    st.warning(
-        "No neighborhoods match the current hard filters. Loosen your constraints."
+if n < 4:
+    st.error(
+        "Fewer than 4 neighborhoods match the current filters. "
+        "Loosen borough selection or add more boroughs to run clustering."
     )
     st.stop()
 
-display_cols = [
-    "neighborhood",
-    "borough",
-    "total_poi",
-    "subway_station_count",
-    "avg_pedestrian",
-    "poi_density_per_km2",
-    "commercial_activity_score",
-    "transit_activity_score",
+# ── Build feature matrix ─────────────────────────────────────────────────────
+
+
+def zscore_normalize(arr: np.ndarray) -> np.ndarray:
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0)
+    return (arr - mean) / (std + 1e-8)
+
+
+X_raw = df_clean[selected_features].values.astype(float)
+X = zscore_normalize(X_raw)
+
+effective_max_k = min(max_k, n - 1)
+k_range = list(range(2, effective_max_k + 1))
+
+if effective_max_k < max_k:
+    st.info(
+        f"max_k capped at {effective_max_k} (= n − 1 = {n} − 1) "
+        f"because you cannot have more clusters than neighborhoods."
+    )
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+CLUSTER_PALETTE: list[str] = [
+    "#4A90D9", "#E74C3C", "#2ECC71", "#F39C12", "#9B59B6",
+    "#1ABC9C", "#E67E22", "#3498DB", "#E91E63", "#00BCD4",
+    "#8BC34A", "#FF5722", "#795548", "#607D8B", "#FF9800",
+    "#673AB7", "#009688", "#F44336", "#CDDC39", "#03A9F4",
 ]
-for optional_col in ["nfh_overall_score", "nfh_goal4_fin_shocks_score"]:
-    if optional_col in df_filtered.columns:
-        display_cols.append(optional_col)
-st.dataframe(
-    df_filtered[display_cols].reset_index(drop=True),
-    use_container_width=True,
-    height=300,
-)
-
-with st.expander("About zeros, nulls, and refreshing data", expanded=False):
-    st.markdown(
-        """
-**Why you used to see nulls (`None`)**
-
-- **NFH columns** (`nfh_*`) only load if the Neighborhood Financial Health CSV is parsed and joined on Community District. Older exports used labels like `BX Community District 8`; the pipeline now normalizes those to `BX08` so scores merge correctly.
-- **Profile / NFH numeric gaps** after the CDTA join are filled in the pipeline with **borough median, then citywide median** (a proxy for CDTAs that do not match a single profile row). They are useful for dashboards, not exact tract-level truth.
-
-**`commercial_activity_score` and `transit_activity_score`**
-
-- **`commercial_activity_score` = `total_poi` × `avg_pedestrian`** (after filling missing POI counts with 0 and missing pedestrian averages with the citywide mean, then any remaining NaN pedestrian with 0).
-- **`transit_activity_score` = `subway_station_count` × `avg_pedestrian`** with the same pedestrian handling.
-- A row can still show **0** when **`total_poi` is 0** (no businesses in the data for that CDTA) or **`subway_station_count` is 0**, or when pedestrian signal is still 0 after imputation. That is a real signal from the inputs, not a broken join.
-
-**If numbers look stale after changing the pipeline**
-
-- Regenerate with `python run_pipeline.py`, then in Streamlit use **Rerun** or **Clear cache** (menu) so `load_data()` picks up the new `neighborhood_features_final.csv`.
-        """
-    )
-
-# ── Sidebar: Soft Preferences ──────────────────────────────────────────────
-
-st.sidebar.markdown("---")
-st.sidebar.header("Soft Preferences")
-
-if "soft_query_committed" not in st.session_state:
-    st.session_state.soft_query_committed = DEFAULT_SOFT_QUERY
-if "soft_query_draft" not in st.session_state:
-    st.session_state.soft_query_draft = st.session_state.soft_query_committed
-
-with st.sidebar.form("soft_preferences_form"):
-    st.caption(
-        "Edit your description, then click **Update soft ranking** to refresh semantic similarity "
-        "(and the blended table). In a multi-line box, use the button; "
-        "you can also focus the button and press Enter."
-    )
-    st.text_area(
-        "Describe your ideal area",
-        height=100,
-        key="soft_query_draft",
-    )
-    submitted_soft = st.form_submit_button("Update soft ranking")
-
-if submitted_soft:
-    st.session_state.soft_query_committed = st.session_state.soft_query_draft
-
-soft_query = st.session_state.soft_query_committed
-
-st.sidebar.markdown("**Blend** (α + β = 1)")
-alpha = st.sidebar.slider(
-    "\u03b1 — semantic similarity",
-    0.0,
-    1.0,
-    DEFAULT_ALPHA_SEMANTIC,
-    0.05,
-    help="Weight on embedding cosine similarity; β = 1 − α goes to commercial_activity_score.",
-)
-beta = 1.0 - alpha
-_w = np.array([alpha, beta], dtype=float)
-st.sidebar.caption(
-    f"\u03b2 — commercial activity = 1 − \u03b1 → \u03b1={alpha:.3f}, \u03b2={beta:.3f}"
-)
-
-# ── Soft ranking: semantic + commercial activity ────────────────────────────
-
-st.subheader("Soft ranking (α·semantic + β·commercial activity)")
-st.caption(
-    "Semantic similarity uses the **submitted** text from the sidebar (after **Update soft ranking**). "
-    "Changing α still updates the blend immediately."
-)
 
 
-@st.cache_data(show_spinner="Loading neighborhood embeddings...")
-def get_all_embeddings():
-    return embed_neighborhood_features()
+def find_elbow(k_range: list[int], inertias: list[float]) -> int:
+    """Return the k at the elbow using the perpendicular-distance (kneedle) method.
+
+    Normalises both axes to [0,1] and finds the point with the maximum
+    orthogonal distance from the chord connecting the first and last points.
+    """
+    ks = np.array(k_range, dtype=float)
+    ys = np.array(inertias, dtype=float)
+    # Normalize both axes to [0, 1]
+    ks_n = (ks - ks.min()) / (ks.max() - ks.min() + 1e-12)
+    ys_n = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
+    # Direction vector of the chord from first to last point
+    dx = ks_n[-1] - ks_n[0]
+    dy = ys_n[-1] - ys_n[0]
+    norm = np.sqrt(dx ** 2 + dy ** 2) + 1e-12
+    # Perpendicular distance of each point from the chord
+    distances = np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
+    return k_range[int(np.argmax(distances))] 
 
 
-try:
-    all_embeddings, all_texts = get_all_embeddings()
+def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
+    """Return the k at the smallest local minimum of the inertia curve.
 
-    full_neighborhoods = load_data()["neighborhood"].tolist()
-    filtered_neighborhoods = df_filtered["neighborhood"].tolist()
-    idx_map = {name: i for i, name in enumerate(full_neighborhoods)}
-    filtered_indices = [idx_map[n] for n in filtered_neighborhoods if n in idx_map]
+    A local minimum at index i means inertias[i] < inertias[i-1] and
+    inertias[i] < inertias[i+1].  Among all such points, returns the one
+    with the smallest inertia value (the lowest dip on the curve).
 
-    if filtered_indices:
-        filtered_embeddings = all_embeddings[filtered_indices]
-        query_embedding = embed_texts([soft_query])[0]
-        sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
+    Falls back to find_elbow() when fewer than 3 points are available or
+    when the curve is strictly monotone (no interior local minimum exists).
+    """
+    if len(k_range) <= 3:
+        return k_range[np.argmin(inertias)]
+        #return find_elbow(k_range, inertias)
 
-        keep_names = [n for n in filtered_neighborhoods if n in idx_map]
-        if "commercial_activity_score" not in df_filtered.columns:
-            raise KeyError(
-                "Column commercial_activity_score missing from feature table."
-            )
+    ys = np.array(inertias, dtype=float)
+    local_minima = [
+        i for i in range(1, len(ys) - 1)
+        if ys[i] < ys[i - 1] and ys[i] < ys[i + 1]
+    ]
 
-        act_scores = np.array(
-            [
-                float(
-                    df_filtered.loc[
-                        df_filtered["neighborhood"] == n, "commercial_activity_score"
-                    ].iloc[0]
-                )
-                for n in keep_names
-            ],
-            dtype=float,
-        )
+    if not local_minima:
+        return find_elbow(k_range, inertias)
 
-        X = np.column_stack([sim_scores.astype(float), act_scores])
-        if X.shape[0] == 1:
-            scores_scaled = np.ones((1, 2)) * 0.5
-        else:
-            scores_scaled = MinMaxScaler().fit_transform(X)
+    # Among all local minima, pick the one with the lowest inertia value
+    best_i = min(local_minima, key=lambda i: ys[i])
+    return k_range[best_i]
 
-        final_scores = scores_scaled @ _w
 
-        ranking_df = (
-            pd.DataFrame(
+
+
+def _color_for_cluster(c: int) -> str:
+    return CLUSTER_PALETTE[c % len(CLUSTER_PALETTE)]
+
+
+@st.cache_data(show_spinner=False)
+def _cdta_geometry_table(shape_path_str: str) -> pd.DataFrame:
+    """One row per CDTA polygon in WGS84, with a stable map join key."""
+    gdf = load_boundaries(Path(shape_path_str))
+    out = gdf.copy()
+    out["map_key"] = out["cd"] + " | " + out["borough"]
+    return out[["neighborhood", "cd", "borough", "map_key", "geometry"]].copy()
+
+
+def _cluster_semantics_from_embeddings(
+    df_master: pd.DataFrame,
+    df_clustered: pd.DataFrame,
+    labels: np.ndarray,
+    k: int,
+    *,
+    top_n: int = 3,
+    text_max_len: int = 420,
+) -> list[dict[str, object]] | None:
+    """Per-cluster representatives using cached OpenAI embeddings (full-table row order)."""
+    loaded = load_embeddings()
+    if loaded is None:
+        return None
+    emb_all, texts_all = loaded
+    n_master = len(df_master)
+    if emb_all.shape[0] != n_master or len(texts_all) != n_master:
+        return None
+    name_to_row = {str(n): i for i, n in enumerate(df_master["neighborhood"].tolist())}
+    names_rows = df_clustered["neighborhood"].astype(str).tolist()
+    lab = labels.astype(int, copy=False)
+    rows_out: list[dict[str, object]] = []
+    for c in range(k):
+        pairs: list[tuple[str, int]] = []
+        for i in range(len(lab)):
+            if int(lab[i]) != c:
+                continue
+            nm = names_rows[i]
+            if nm not in name_to_row:
+                continue
+            pairs.append((nm, name_to_row[nm]))
+        if not pairs:
+            rows_out.append({"cluster": c, "n": 0, "reps": []})
+            continue
+        row_idx = np.array([p[1] for p in pairs], dtype=int)
+        Xc = emb_all[row_idx].astype(np.float32, copy=False)
+        mean_v = Xc.mean(axis=0).astype(np.float32, copy=False)
+        sims = cosine_similarity(mean_v, Xc)
+        order = np.argsort(-sims)
+        take = min(top_n, len(order))
+        reps: list[dict[str, object]] = []
+        for j in range(take):
+            li = int(order[j])
+            r = int(row_idx[li])
+            txt = str(texts_all[r])
+            if len(txt) > text_max_len:
+                txt = txt[: text_max_len - 1] + "…"
+            reps.append(
                 {
-                    "neighborhood": keep_names,
-                    "semantic_similarity": sim_scores.round(4),
-                    "commercial_activity_score": act_scores.round(0).astype(int),
-                    "blended_score": final_scores.round(4),
+                    "neighborhood": pairs[li][0],
+                    "cosine_to_mean": float(sims[li]),
+                    "profile_excerpt": txt,
                 }
             )
-            .sort_values("blended_score", ascending=False)
-            .reset_index(drop=True)
+        rows_out.append({"cluster": c, "n": len(pairs), "reps": reps})
+    return rows_out
+
+
+def _cluster_brief_description(
+    centroid: np.ndarray,
+    features: list[str],
+    *,
+    hi_thr: float = 0.5,
+    lo_thr: float = -0.5,
+) -> str:
+    """One-line summary from centroid z-scores."""
+    vals = np.asarray(centroid, dtype=float)
+    if vals.size == 0:
+        return "Balanced profile (no clear dominant signals)."
+    order_hi = np.argsort(-vals)
+    order_lo = np.argsort(vals)
+    hi = [features[i] for i in order_hi if vals[i] >= hi_thr][:3]
+    lo = [features[i] for i in order_lo if vals[i] <= lo_thr][:2]
+
+    def _fmt(name: str) -> str:
+        return name.replace("_", " ")
+
+    hi_txt = ", ".join(_fmt(x) for x in hi)
+    lo_txt = ", ".join(_fmt(x) for x in lo)
+    # Centroids are in z-score space of the filtered rows (mean 0, std 1 per feature).
+    if hi and lo:
+        return f"Above average on {hi_txt}; relatively lower on {lo_txt}."
+    if hi:
+        return f"Above average on {hi_txt}."
+    if lo:
+        return (
+            "No feature is strongly above the filtered-set average (z < "
+            f"{hi_thr:g}); relatively lower on {lo_txt}."
+        )
+    return (
+        "Mid-range on all selected features for this filter "
+        f"(no z ≥ {hi_thr:g} or z ≤ {lo_thr:g} at the cluster centroid)."
+    )
+
+
+# ── Run analysis ─────────────────────────────────────────────────────────────
+
+if st.button("Run K-Selection Analysis", type="primary"):
+    inertias: list[float] = []
+    sil_numpy: list[float] = []
+    sil_sklearn: list[float] = []
+
+    progress = st.progress(0, text="Running K-means…")
+    total_steps = len(k_range)
+
+    for step, k in enumerate(k_range):
+        labels, centroids, _ = kmeans(X, k, random_state=42)
+        inertias.append(compute_inertia(X, labels, centroids))
+        sil_numpy.append(silhouette_score(X, labels))
+        sil_sklearn.append(float(sklearn_silhouette_score(X, labels)))
+        progress.progress((step + 1) / total_steps, text=f"k = {k} / {effective_max_k}")
+
+    progress.empty()
+
+    elbow_k = find_elbow_minima(k_range, inertias)
+    elbow_k_kneedle = find_elbow(k_range, inertias)
+    best_sil_k = k_range[int(np.argmax(sil_sklearn))]
+
+    # Persist to session state so the viz section survives Streamlit reruns
+    st.session_state["ks_k_range"] = k_range
+    st.session_state["ks_inertias"] = inertias
+    st.session_state["ks_sil_numpy"] = sil_numpy
+    st.session_state["ks_sil_sklearn"] = sil_sklearn
+    st.session_state["ks_elbow_k"] = elbow_k
+    st.session_state["ks_elbow_k_kneedle"] = elbow_k_kneedle
+    st.session_state["ks_best_sil_k"] = best_sil_k
+    st.session_state["ks_X"] = X
+    st.session_state["ks_X_raw"] = X_raw
+    st.session_state["ks_df_clean"] = df_clean
+    st.session_state["ks_features"] = selected_features
+    st.session_state["ks_n"] = n
+
+# ── Display results (persisted via session state) ────────────────────────────
+
+if "ks_k_range" in st.session_state:
+    k_range_s: list[int] = st.session_state["ks_k_range"]
+    inertias_s: list[float] = st.session_state["ks_inertias"]
+    sil_numpy_s: list[float] = st.session_state["ks_sil_numpy"]
+    sil_sklearn_s: list[float] = st.session_state["ks_sil_sklearn"]
+    elbow_k: int = st.session_state["ks_elbow_k"]
+    elbow_k_kneedle: int = st.session_state["ks_elbow_k_kneedle"]
+    best_sil_k: int = st.session_state["ks_best_sil_k"]
+    X_s: np.ndarray = st.session_state["ks_X"]
+    X_raw_s: np.ndarray = st.session_state["ks_X_raw"]
+    df_s: pd.DataFrame = st.session_state["ks_df_clean"]
+    features_s: list[str] = st.session_state["ks_features"]
+    n_s: int = st.session_state["ks_n"]
+
+    elbow_idx = k_range_s.index(elbow_k)
+    st.success(
+        f"Primary inertia k (grey line + yellow table row): **k = {elbow_k}**  ·  "
+        f"Kneedle-only k: **k = {elbow_k_kneedle}**  ·  "
+        f"Best silhouette k (sklearn): **k = {best_sil_k}**"
+    )
+
+    # ── Dual-axis Plotly chart ────────────────────────────────────────────────
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=k_range_s,
+            y=inertias_s,
+            mode="lines+markers",
+            marker=dict(size=8, color="#4A90D9"),
+            line=dict(width=2, color="#4A90D9"),
+            name="Inertia (WCSS)",
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=k_range_s,
+            y=sil_numpy_s,
+            mode="lines+markers",
+            marker=dict(size=8, color="#E74C3C", symbol="square"),
+            line=dict(width=2, color="#E74C3C", dash="dash"),
+            name="Silhouette (NumPy)",
+        ),
+        secondary_y=True,
+    )
+
+    fig.add_vline(
+        x=elbow_k,
+        line_dash="dash",
+        line_color="gray",
+        annotation_text=f"primary k={elbow_k}",
+        annotation_position="top right",
+    )
+    if elbow_k_kneedle != elbow_k:
+        fig.add_vline(
+            x=elbow_k_kneedle,
+            line_dash="dot",
+            line_color="darkgreen",
+            annotation_text=f"kneedle k={elbow_k_kneedle}",
+            annotation_position="top left",
         )
 
-        ranking_df.index = ranking_df.index + 1
-        ranking_df.index.name = "rank"
+    fig.update_xaxes(title_text="k (number of clusters)", tickvals=k_range_s)
+    fig.update_yaxes(title_text="Inertia (WCSS)", secondary_y=False)
+    fig.update_yaxes(title_text="Silhouette Score", secondary_y=True)
+    fig.update_layout(
+        title=f"Elbow Method: Inertia & Silhouette vs. k  ({n_s} neighborhoods, {len(features_s)} features)",
+        height=460,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
 
-        st.dataframe(ranking_df, use_container_width=True, height=350)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.info(
+        "**Grey dashed line** (and the **yellow row** in the results table) = primary **k** from the "
+        "**inertia (WCSS) curve**: among interior *k* where WCSS has a **local minimum** (a dip), pick the "
+        "**lowest WCSS** among those minima; if the curve has **no** interior local minimum, use **kneedle** "
+        "(maximum perpendicular distance from the chord between the first and last points, after scaling "
+        "*k* and WCSS to [0, 1]). If only 2–3 values of *k* are swept, it picks *k* with **minimum WCSS**.  "
+        "**Green dotted line** = kneedle applied the same way, shown only when it differs from the primary.  "
+        "**Silhouette** (red) is a separate cue; **best silhouette k** is another common choice. "
+        "All are **heuristics**—use the *k* you can interpret, not necessarily the highlighted one."
+    )
+
+    # ── Cluster visualization ─────────────────────────────────────────────────
+
+    st.subheader("Cluster Visualization")
+
+    # Single partition: primary inertia k (same as grey line / yellow row). All clusters in that solution are plotted.
+    viz_k = elbow_k
+    st.caption(
+        f"Using **k = {viz_k}** (primary inertia suggestion). "
+        f"Scatter, map, centroid bars, and notes below show all **{viz_k}** clusters."
+    )
+
+    viz_labels, viz_centroids, _ = kmeans(X_s, viz_k, random_state=42)
+
+    # Share with Ranking page: neighborhood → cluster id, and per-cluster brief text
+    _names_v = df_s["neighborhood"].astype(str).tolist()
+    st.session_state["ks_cluster_by_neighborhood"] = {
+        _names_v[i]: int(viz_labels[i]) for i in range(len(_names_v))
+    }
+    st.session_state["ks_cluster_brief"] = {
+        c: _cluster_brief_description(viz_centroids[c], features_s) for c in range(viz_k)
+    }
+    st.session_state["ks_cluster_k"] = int(viz_k)
+
+    col_left, col_right = st.columns(2)
+
+    # ── View 1: Feature scatter ───────────────────────────────────────────────
+
+    with col_left:
+        st.markdown("**Feature Scatter**")
+        xf = st.selectbox("X axis", options=features_s, index=features_s.index("avg_pedestrian") if "avg_pedestrian" in features_s else 0, key="scatter_x")
+        yf = st.selectbox("Y axis", options=features_s, index=features_s.index("total_poi") if "total_poi" in features_s else min(1, len(features_s) - 1), key="scatter_y")
+
+        xi = features_s.index(xf)
+        yi = features_s.index(yf)
+
+        scatter_fig = go.Figure()
+
+        for c in range(viz_k):
+            mask = viz_labels == c
+            scatter_fig.add_trace(go.Scatter(
+                x=X_raw_s[mask, xi],
+                y=X_raw_s[mask, yi],
+                mode="markers",
+                marker=dict(size=9, color=_color_for_cluster(c), opacity=0.85,
+                            line=dict(width=0.5, color="white")),
+                name=f"Cluster {c}",
+                text=df_s["neighborhood"].values[mask],
+                hovertemplate="<b>%{text}</b><br>" + xf + ": %{x:.1f}<br>" + yf + ": %{y:.1f}<extra></extra>",
+            ))
+
+        # Centroid stars (in raw space: centroid in z-score → back to raw)
+        x_mean = X_raw_s.mean(axis=0)
+        x_std = X_raw_s.std(axis=0) + 1e-8
+        centroids_raw = viz_centroids * x_std + x_mean
+
+        for c in range(viz_k):
+            scatter_fig.add_trace(go.Scatter(
+                x=[centroids_raw[c, xi]],
+                y=[centroids_raw[c, yi]],
+                mode="markers",
+                marker=dict(size=18, symbol="star", color=_color_for_cluster(c),
+                            line=dict(width=1.5, color="black")),
+                name=f"Centroid {c}",
+                showlegend=False,
+                hovertemplate=f"<b>Centroid {c}</b><br>" + xf + ": %{x:.2f}<br>" + yf + ": %{y:.2f}<extra></extra>",
+            ))
+
+        scatter_fig.update_layout(
+            xaxis_title=xf,
+            yaxis_title=yf,
+            height=420,
+            legend=dict(orientation="v", x=1.01, y=1),
+            margin=dict(r=120),
+        )
+        st.plotly_chart(scatter_fig, use_container_width=True)
+
+    # ── View 2: Centroid bar chart ────────────────────────────────────────────
+
+    with col_right:
+        st.markdown("**Centroid Profiles** *(z-score space)*")
+
+        bar_fig = go.Figure()
+        for c in range(viz_k):
+            bar_fig.add_trace(go.Bar(
+                name=f"Cluster {c}",
+                x=features_s,
+                y=viz_centroids[c].tolist(),
+                marker_color=_color_for_cluster(c),
+                opacity=0.85,
+            ))
+
+        bar_fig.update_layout(
+            barmode="group",
+            xaxis_title="Feature",
+            yaxis_title="Normalized value (z-score)",
+            xaxis_tickangle=-35,
+            height=420,
+            legend=dict(orientation="v", x=1.01, y=1),
+            margin=dict(r=120),
+        )
+        st.plotly_chart(bar_fig, use_container_width=True)
+
+    # ── NYC map (CDTA choropleth) ────────────────────────────────────────────
+
+    st.markdown("**NYC map** *(CDTA polygons filled by cluster)*")
+
+    if not CDTA_SHAPE_PATH.is_file():
+        st.info(
+            f"No boundary file at `{CDTA_SHAPE_PATH}` — map is skipped. "
+            "The CDTA shapefile is normally under `data/raw/nyc_boundaries/`."
+        )
     else:
-        st.info("Could not map filtered neighborhoods to embeddings.")
-
-except Exception as e:
-    st.warning(
-        f"Semantic search unavailable (embeddings not cached or OPENAI_API_KEY not set): {e}\n\n"
-        "Run `python -m src.embeddings` to generate embeddings first, or set OPENAI_API_KEY in .env."
-    )
-
-# ── Claude agent analysis ──────────────────────────────────────────────────
-
-st.subheader("AI analysis (Claude)")
-
-if st.button("Ask Claude to analyze filtered data", type="primary"):
-    with st.spinner("Claude is analyzing the filtered neighborhoods..."):
-        try:
-            prompt = (
-                f"The user is looking for: {soft_query}\n\n"
-                f"There are {len(df_filtered)} neighborhoods that passed the hard filters. "
-                f"Use the run_sql tool to explore the data and recommend the top 3-5 "
-                f"neighborhoods that best match the user's soft preferences. "
-                f"Explain your reasoning with specific data points."
+        shape_df = _cdta_geometry_table(str(CDTA_SHAPE_PATH))
+        shape_geojson = shape_df.__geo_interface__
+        map_df = df_s[["neighborhood", "cd", "borough"]].copy()
+        map_df["cluster"] = viz_labels.astype(int)
+        map_df["map_key"] = map_df["cd"] + " | " + map_df["borough"]
+        map_df = map_df.merge(
+            shape_df[["map_key", "geometry"]],
+            on="map_key",
+            how="left",
+        )
+        n_missing = int(map_df["geometry"].isna().sum())
+        if n_missing:
+            st.warning(
+                f"{n_missing} row(s) could not be matched to the shapefile on "
+                "`cd` + `borough`; they are omitted from the map."
             )
-            answer = run_agent(prompt, df_filtered)
-            st.markdown(answer)
-        except Exception as e:
-            st.error(
-                f"Claude agent error: {e}\n\nMake sure ANTHROPIC_API_KEY is set in your .env file."
+        map_plot = map_df.dropna(subset=["geometry"]).copy()
+        if map_plot.empty:
+            st.warning("No polygons to plot on the map.")
+        else:
+            map_plot["cluster_label"] = map_plot["cluster"].map(lambda c: f"Cluster {c}")
+            map_fig = go.Figure()
+            for c in range(viz_k):
+                sub = map_plot[map_plot["cluster"] == c]
+                if sub.empty:
+                    continue
+                map_fig.add_trace(
+                    go.Choroplethmapbox(
+                        geojson=shape_geojson,
+                        locations=sub["map_key"],
+                        z=[1] * len(sub),
+                        featureidkey="properties.map_key",
+                        colorscale=[
+                            [0.0, _color_for_cluster(c)],
+                            [1.0, _color_for_cluster(c)],
+                        ],
+                        showscale=False,
+                        marker_opacity=0.65,
+                        marker_line_width=1.0,
+                        marker_line_color="white",
+                        name=f"Cluster {c}",
+                        text=sub["neighborhood"] + " (" + sub["cd"] + ")",
+                        hovertemplate=(
+                            "<b>%{text}</b><br>"
+                            "cluster=" + str(c) + "<extra></extra>"
+                        ),
+                    )
+                )
+            bounds = shape_df.geometry.total_bounds
+            lon0 = float((bounds[0] + bounds[2]) / 2)
+            lat0 = float((bounds[1] + bounds[3]) / 2)
+            map_fig.update_layout(
+                height=480,
+                margin=dict(l=0, r=0, t=8, b=0),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                mapbox=dict(
+                    style="open-street-map",
+                    center=dict(lat=lat0, lon=lon0),
+                    zoom=9,
+                ),
             )
+            st.plotly_chart(map_fig, use_container_width=True)
 
-# ── Feature summary ─────────────────────────────────────────────────────────
+    # ── Semantic hints from cached OpenAI embeddings ─────────────────────────
 
-st.markdown("---")
-st.subheader("Feature summary")
+    st.subheader("Cluster notes (cached OpenAI embeddings)")
+    st.caption(
+        "Same vectors as the main app (`outputs/embeddings/`). This page does **not** call the API. "
+        "Per cluster: average embedding of members, then the neighborhoods whose vectors are "
+        "closest to that mean (cosine). Text is the saved profile string from `src.embeddings`."
+    )
+    sem = _cluster_semantics_from_embeddings(df_full, df_s, viz_labels, viz_k)
+    if sem is None:
+        st.info(
+            "No embedding cache found, or embedding row count does not match "
+            "`neighborhood_features_final.csv`. Run `python -m src.embeddings` from the repo root "
+            "(add `--force` after changing the feature CSV)."
+        )
+    else:
+        for block in sem:
+            c = int(block["cluster"])
+            n_cluster = int(block["n"])
+            reps = block["reps"]
+            with st.expander(f"Cluster {c} — n={n_cluster} neighborhoods", expanded=(c == 0)):
+                st.markdown(
+                    f"**Brief description:** {_cluster_brief_description(viz_centroids[c], features_s)}"
+                )
+                if not reps:
+                    st.write("No members matched the embedding index.")
+                else:
+                    for rank, rep in enumerate(reps, start=1):
+                        sim = float(rep["cosine_to_mean"])
+                        nm = str(rep["neighborhood"])
+                        excerpt = str(rep["profile_excerpt"])
+                        st.markdown(
+                            f"**{rank}.** `{nm}` — cosine to cluster mean **{sim:.3f}**"
+                        )
+                        st.caption(excerpt)
 
-col1, col2 = st.columns(2)
+    # ── Summary table ─────────────────────────────────────────────────────────
 
-with col1:
-    st.markdown("**Hard filter columns** (DuckDB SQL)")
-    st.markdown(
-        "| Column | Type | Description |\n"
-        "|--------|------|-------------|\n"
-        "| `borough` | categorical | NYC borough (5 values) |\n"
-        "| `subway_station_count` | int | Subway stations in neighborhood |\n"
-        "| `avg_pedestrian` | float | Average pedestrian count |\n"
-        "| `poi_density_per_km2` | float | Business density per km\u00b2 |\n"
-        "| `total_poi` | int | Total points of interest |\n"
-        "| `commercial_activity_score` | float | POI \u00d7 pedestrian activity |\n"
-        "| `nfh_goal4_fin_shocks_score` | float | Optional: NFH Goal 4 (financial shocks) index |\n"
-        "| `nfh_overall_score` | float | Optional: NFH overall index |"
+    st.subheader("Results table")
+    st.caption(
+        "The highlighted row is the **primary inertia suggestion** (same *k* as the grey vertical line on the chart). "
+        "It is **not** a guaranteed best *k*—compare with silhouette and domain judgment."
     )
 
-with col2:
-    st.markdown("**Soft / embedded columns** (OpenAI `text-embedding-3-small`)")
-    st.markdown(
-        "| Column | Used in text profile |\n"
-        "|--------|---------------------|\n"
-        "| `neighborhood` | Name context |\n"
-        "| `borough` | Geographic context |\n"
-        "| `total_poi` | Business count |\n"
-        "| `category_entropy` | Industry diversity |\n"
-        "| `avg_pedestrian` | Foot traffic level |\n"
-        "| `subway_station_count` | Transit access |\n"
-        "| `poi_density_per_km2` | Density descriptor |\n"
-        "| `commercial_activity_score` | Activity level |\n"
-        "| `transit_activity_score` | Transit activity |\n"
-        "| *Blended* | MinMax([semantic, commercial_activity]) then α·semantic + (1−α)·activity |"
+    results_df = pd.DataFrame({
+        "k": k_range_s,
+        "inertia": [round(v, 2) for v in inertias_s],
+        "silhouette_numpy": [round(v, 4) for v in sil_numpy_s],
+        "silhouette_sklearn": [round(v, 4) for v in sil_sklearn_s],
+    })
+
+    # High-contrast row for dark Streamlit themes (pale yellow + default text was hard to read).
+    _elbow_row_style = (
+        "background-color: #3d3520; color: #fef9e8; font-weight: 600; "
+        "border-top: 2px solid #eab308; border-bottom: 2px solid #eab308"
     )
 
-st.markdown(
-    "**Pipeline**: Hard filters \u2192 DuckDB SQL \u2192 MinMaxScaler on "
-    "[cosine semantic, commercial_activity_score] \u2192 "
-    "α·col0 + β·col1 (β = 1 − α) \u2192 optional Claude SQL analysis."
-)
+    def highlight_elbow(row: pd.Series) -> list[str]:
+        if row["k"] == elbow_k:
+            return [_elbow_row_style] * len(row)
+        return [""] * len(row)
+
+    styled = results_df.style.apply(highlight_elbow, axis=1).format(
+        {"inertia": "{:,.2f}", "silhouette_numpy": "{:.4f}", "silhouette_sklearn": "{:.4f}"}
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # ── Feature details ───────────────────────────────────────────────────────
+
+    with st.expander("Feature details", expanded=False):
+        st.markdown(
+            "Features were **z-score normalised** before clustering "
+            f"(mean=0, std≈1 per column). {n_s} neighborhoods × {len(features_s)} features."
+        )
+        feat_stats = pd.DataFrame({
+            "feature": features_s,
+            "mean (raw)": X_raw_s.mean(axis=0).round(3),
+            "std (raw)": X_raw_s.std(axis=0).round(3),
+        })
+        st.dataframe(feat_stats, use_container_width=True, hide_index=True)

@@ -12,6 +12,8 @@ import geopandas as gpd
 
 WGS84 = "EPSG:4326"
 NYC_PROJECTED = "EPSG:2263"
+# EPSG:2263 (NY State Plane, ftUS): geometry.area is in square feet, not m².
+_SQFT_TO_KM2 = (0.3048**2) / 1_000_000.0
 
 
 # =========================================================
@@ -197,7 +199,7 @@ def spatial_join_points(
 
 def compute_area_features(boundary_gdf: gpd.GeoDataFrame) -> pd.DataFrame:
     gdf = boundary_gdf.to_crs(NYC_PROJECTED).copy()
-    gdf["area_km2"] = gdf.geometry.area / 1_000_000
+    gdf["area_km2"] = gdf.geometry.area * _SQFT_TO_KM2
     return gdf[["neighborhood", "cd", "borough", "area_km2"]].copy()
 
 
@@ -357,6 +359,9 @@ def merge_all_features(
             df["restaurant_density_per_km2"] = safe_divide(df["num_restaurant"], df["area_km2"])
         if "num_retail" in df.columns:
             df["retail_density_per_km2"] = safe_divide(df["num_retail"], df["area_km2"])
+        # Food POIs = simplified "food" category count per CDTA (same basis as `food` column).
+        if "food" in df.columns:
+            df["food_density_per_km2"] = safe_divide(df["food"], df["area_km2"])
         if "subway_station_count" in df.columns:
             df["subway_density_per_km2"] = safe_divide(df["subway_station_count"], df["area_km2"])
 
@@ -374,7 +379,7 @@ def merge_all_features(
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    for col in ["num_retail", "ratio_retail", "retail_density_per_km2"]:
+    for col in ["num_retail", "ratio_retail", "retail_density_per_km2", "food_density_per_km2"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 

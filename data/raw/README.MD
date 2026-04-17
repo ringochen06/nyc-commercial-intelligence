@@ -1,10 +1,10 @@
 # Raw Data
 
-Source files for the pipeline live under `data/raw/`. **CSVs are not committed** (see `.gitignore`); the **CDTA `nycdta2020.*` shapefile** under `nyc_boundaries/` **is committed** in this repo so you can run the pipeline without downloading boundaries.
+Inputs for `run_pipeline.py` go in **`data/raw/`**. CSVs are **gitignored**; the **CDTA shapefile** under `nyc_boundaries/` is **in the repo** so boundaries work without a separate download.
 
 ## Expected files (match `run_pipeline.py`)
 
-Place these **exact filenames** under `data/raw/` (or update the paths in `run_pipeline.py` if your downloads use different names):
+Use these **exact names** under `data/raw/` (or change paths in `run_pipeline.py`):
 
 | File | Role |
 |------|------|
@@ -18,21 +18,27 @@ Place these **exact filenames** under `data/raw/` (or update the paths in `run_p
 
 The NFH CSV uses `CD` values such as `BX Community District 8`; the pipeline normalizes these to the same codes used for CDTA joins (e.g. `BX08`).
 
-## Where to get files (e.g. live demo on a new laptop)
+## Source datasets (links)
 
-1. **Hugging Face dataset (if your team publishes one)**  
-   Example: **`ringoch/nyc-commercial-data`**. On the Hub, CSVs and the CDTA shapefile pieces (`nycdta2020.shp`, `.shx`, `.dbf`, `.prj`, `.shp.xml`) usually sit in the **repo root** together — not inside a `nyc_boundaries/` folder. After you download:
+Upstream providers for the files in the table above. Rename downloads to match `run_pipeline.py` or edit paths there.
 
-   - Put all **`.csv`** files under **`data/raw/`** using the **same names as on Hugging Face** (see table above and `run_pipeline.py`).
-   - Create **`data/raw/nyc_boundaries/`** and **move** every file named **`nycdta2020.*`** into that folder. The pipeline expects **`data/raw/nyc_boundaries/nycdta2020.shp`** (GeoPandas reads the sidecars next to it).
+| Topic | What it feeds | Link |
+|-------|----------------|------|
+| Commerce | Restaurant / food POI (inspections) | [DOHMH Restaurant Inspection Results](https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j/about_data) |
+| Commerce | Retail & licensed businesses | [NYC Issued Licenses](https://data.cityofnewyork.us/Business/Issued-Licenses/w7w3-xahh/about_data) |
+| Commerce | Optional: businesses extract | [Kaggle — legally operating businesses](https://www.kaggle.com/datasets/new-york-city/ny-legally-operating-businesses) |
+| Transit | Subway stations | [MTA Subway Stations (NY)](https://data.ny.gov/Transportation/MTA-Subway-Stations/39hk-dx4f/about_data) |
+| Streets | Pedestrian counts | [NYC Bi-Annual Pedestrian Counts](https://data.cityofnewyork.us/Transportation/Bi-Annual-Pedestrian-Counts/cqsj-cfgu/about_data) |
+| Profiles | ACS neighborhood economic stats | [NYC Comptroller — Neighborhood Economic Profiles](https://comptroller.nyc.gov/reports/nyc-neighborhood-economic-profiles/) |
+| Boundaries | CDTA 2020 polygons | [NYC Planning — CDTA](https://www.nyc.gov/content/planning/pages/resources/datasets/community-district-tabulation) |
+| Optional | Financial health (`nfh_*`) | [NYC Open Data — Neighborhood Financial Health](https://data.cityofnewyork.us/Business/Neighborhood-Financial-Health-Digital-Mapping-and-/r3dx-pew9/about_data) |
 
-2. **NYC Open Data / DCP**  
-   Download the same datasets manually and place or rename them to match `run_pipeline.py` (pedestrian counts, subway stations, restaurant inspections, business licenses, Neighborhood Profiles CSV, **Neighborhood Financial Health** export if you want NFH columns, and **CDTA 2020** shapefile under `data/raw/nyc_boundaries/`).
+## Where to get files
 
-3. **Processed outputs (`data/processed/`)**  
-   These are also **ignored by Git** by default. For a demo you either:
-   - **Generate locally:** install dependencies (`requirements.txt`, includes `geopandas`), put raw data in place, then run  
-     `python run_pipeline.py`  
-   - **Copy a pre-built folder** from a teammate, USB, or a shared release zip / Hugging Face file bundle — not from the GitHub tree unless someone force-committed artifacts (not the default workflow).
+1. **Hugging Face** (e.g. `ringoch/nyc-commercial-data`): download CSVs into `data/raw/` with names from the table; put all `nycdta2020.*` files under `data/raw/nyc_boundaries/` (Hub bundles often leave them in the archive root—move them).
 
-The GitHub repo ships **code + placeholders** (`.gitkeep`); **data must be supplied separately** unless your team documents another channel.
+2. **Manual:** pull the same datasets from NYC Open Data / DCP / Comptroller (see links above), rename to match `run_pipeline.py`.
+
+3. **Processed `data/processed/`:** run `python run_pipeline.py` locally, or copy a pre-built folder from a teammate or release zip.
+
+This repo is **code + placeholders**; raw CSVs are supplied separately unless you use a bundled dataset.

@@ -34,8 +34,10 @@ def save_figure(fig: Any, path: Path) -> None:
     fig.clf()
 
 def load_figure(path: Path) -> Any:
-    """Load figure from file (placeholder)."""
-    raise NotImplementedError("Figure loading not implemented yet")
+    """Load a raster image saved by ``save_figure`` (e.g. PNG). Returns an ndarray (RGB/A)."""
+    import matplotlib.image as mpimg
+
+    return mpimg.imread(str(path))
 
 def save_numpy(array: Any, path: Path) -> None:
     """Save NumPy array to file."""

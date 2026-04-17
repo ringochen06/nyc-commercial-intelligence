@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import numpy as np
 from pathlib import Path
-from . import serialization
+
+try:
+    from . import serialization
+except ImportError:
+    # Loaded as top-level `kmeans_numpy` when `src/` is on sys.path (e.g. Streamlit `app.py`).
+    import serialization
 
 CLUSTER_PATH = Path("outputs/clusters/")
 
@@ -84,8 +89,10 @@ def minibatch_kmeans(
     batch_size: int = 100,
     learning_rate: float = 0.1,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Mini-batch K-means variant for larger datasets; updates centroids incrementally with small random batches."""
-    raise NotImplementedError
+    """Mini-batch K-means (optional extension). Not used by ``app.py``; full batch ``kmeans`` is used instead."""
+    raise NotImplementedError(
+        "minibatch_kmeans is not implemented; use kmeans() or implement this for large-scale data."
+    )
 
 
 def compute_inertia(X: np.ndarray, labels: np.ndarray, centroids: np.ndarray) -> float:

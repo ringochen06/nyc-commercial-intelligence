@@ -426,6 +426,7 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
         "2016 Food Services and Drinking Places",
         "2016 Total Number of Businesses",
         "2016 Median Household Income",
+        "2016 Employed",
         "2016 Commute via Public Transit",
         "2016 Percentage of Population with Bachelor's or Higher",
     ]
@@ -444,6 +445,7 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
         "2016 Food Services and Drinking Places": "food_services",
         "2016 Total Number of Businesses": "total_businesses",
         "2016 Median Household Income": "median_household_income",
+        "2016 Employed": "employed_2016",
         "2016 Commute via Public Transit": "commute_public_transit",
         "2016 Percentage of Population with Bachelor's or Higher": "pct_bachelors_plus",
     })
@@ -458,12 +460,23 @@ def clean_neighborhood_profiles(nbhd_path: str | Path, nfh_path: str | Path | No
         "food_services",
         "total_businesses",
         "median_household_income",
+        "employed_2016",
         "commute_public_transit",
         "pct_bachelors_plus",
     ]
 
     for col in numeric_cols:
         df[col] = clean_numeric_string(df[col])
+
+    # MOCEJ publishes transit commuters as a count; convert to % of 2016 employed (same table).
+    emp = df["employed_2016"]
+    comm = df["commute_public_transit"]
+    df["commute_public_transit"] = np.where(
+        emp.notna() & (emp > 0) & comm.notna(),
+        100.0 * comm / emp,
+        np.nan,
+    )
+    df = df.drop(columns=["employed_2016"])
 
     df["borough"] = df["cd"].apply(extract_borough_from_cd)
     df = df[df["borough"].notna()]

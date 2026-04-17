@@ -77,7 +77,7 @@ Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood 
 
 - `neighborhood`, `cd` (community district string, including combined districts such as `BX01 & BX02`), `borough`
 - Job and business counts: `construction_jobs`, `manufacturing_jobs`, `wholesale_jobs`, `food_services`, `total_businesses`
-- Demographics / SES proxies: `median_household_income`, `commute_public_transit`, `pct_bachelors_plus`, race population columns and derived `pct_*`, `total_jobs`, `total_population_proxy`
+- Demographics / SES proxies: `median_household_income`, `commute_public_transit` (**percent of 2016 employed** who commute via public transit — derived in `clean_neighborhood_profiles` from MOCEJ counts ÷ `2016 Employed`), `pct_bachelors_plus`, race population columns and derived `pct_*`, `total_jobs`, `total_population_proxy`
 - **NFH (when merged):** `nfh_overall_score`, `nfh_goal4_fin_shocks_score`, other `nfh_goal*_score` / `*_rank`, and demographic columns such as `nfh_median_income`, `nfh_poverty_rate`, `nfh_pct_*` (see CSV header for the full list)
 
 **Purpose**
@@ -93,7 +93,7 @@ Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood 
 - **`neighborhood_features.csv`** — written by `run_feature_engineering()` in `src/feature_engineering.py`.
 - **`neighborhood_features_final.csv`** — same table, saved again by `run_pipeline.py` as the default input for **`app.py`** and **`src/embeddings.py`**.
 
-Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows × ~55 columns** (exact counts depend on boundary file and which optional columns exist in `nbhd_clean`).
+Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows × ~57 columns** (exact counts depend on boundary file and which optional columns exist in `nbhd_clean`).
 
 **Not in this table:** There is **no** `persistence_score` column in the current pipeline; the app blends **semantic similarity** and **`commercial_activity_score`** only (see below).
 
@@ -116,7 +116,7 @@ Sources integrated:
 **Retail and Category Structure**
 
 - `num_retail`, `retail`, `food`, `other`
-- `ratio_retail`, `retail_density_per_km2`
+- `ratio_retail`, `retail_density_per_km2`, `food_density_per_km2` (`food` count ÷ `area_km2`)
 
 **Pedestrian Activity**
 
@@ -143,13 +143,13 @@ Examples: `median_household_income`, `pct_bachelors_plus`, `commute_public_trans
 
 ---
 
-## Downstream: embeddings and Streamlit (`app.py`)
+## Downstream: embeddings and Streamlit
 
 1. **`python -m src.embeddings`** reads **`neighborhood_features_final.csv`**, builds one text profile per row (`src/embeddings.py`), calls OpenAI **`text-embedding-3-small`**, and saves **`outputs/embeddings/neighborhood_embeddings.npy`** and **`neighborhood_texts.npy`**.  
-2. **`streamlit run app.py`** loads the CSV (cached) and embeddings (cached).  
-3. **Hard filters:** DuckDB `SELECT` with sidebar thresholds (borough, subway, pedestrian, POI density, total POI, **`commercial_activity_score`**, etc.).  
-4. **Soft ranking:** On the filtered rows, **MinMaxScaler** is fit on **`[cosine_sim, commercial_activity_score]`**. The user sets **one** blend slider **α** for semantic weight; **β = 1 − α** for the scaled activity column. Output column: **`blended_score`**.  
-5. Optional **NFH thresholds** in the sidebar when those columns exist.  
+2. **`streamlit run app.py`** — home is **K-Selection** (`app.py`); open **Ranking** (`pages/Ranking.py`) for filters and blend. Both load the CSV (cached) and embeddings (cached).  
+3. **Ranking page — hard filters:** DuckDB `SELECT` with sidebar thresholds (borough, subway, pedestrian, POI density, total POI, **`commercial_activity_score`**, etc.).  
+4. **Soft ranking:** On the filtered rows, **MinMaxScaler** is fit on **`[cosine_sim, commercial_activity_score]`**. One blend slider **α**; **β = 1 − α**. Output: **`blended_score`**. Optional **CDTA map** (choropleth by `blended_score`) when embeddings and the shapefile are available.  
+5. Optional **NFH thresholds** when those columns exist.  
 6. Optional **Claude** panel: read-only SQL on the filtered dataframe (`ANTHROPIC_API_KEY`).
 
 Details and setup: **root `README.md`**.

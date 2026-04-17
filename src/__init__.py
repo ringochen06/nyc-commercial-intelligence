@@ -1,1 +1,1 @@
-"""Core pipeline: preprocessing, features, retrieval, clustering, models, ranking."""
+"""Core package: preprocessing, features, embeddings, clustering, agent."""

@@ -103,7 +103,8 @@ def run_agent(
 
     Returns the model's final markdown answer.
     """
-    model = model or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    # Default: Sonnet 4.6 (alias). Override with ANTHROPIC_MODEL; older IDs may be deprecated.
+    model = model or os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     client = anthropic.Anthropic()
 
     system_prompt = (

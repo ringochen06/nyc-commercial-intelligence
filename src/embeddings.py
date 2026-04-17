@@ -34,17 +34,27 @@ def build_text_profile(row: pd.Series) -> str:
     Compose a short natural-language profile for one neighborhood row.
 
     Columns used (from neighborhood_features_final.csv):
-      neighborhood, borough, total_poi, category_entropy,
-      avg_pedestrian, subway_station_count, poi_density_per_km2,
-      commercial_activity_score, transit_activity_score
+      neighborhood, borough, area_km2, total_poi, unique_poi, ratio_retail,
+      category_entropy, avg_pedestrian, subway_station_count, poi_density_per_km2,
+      retail_density_per_km2, food_density_per_km2,
+      median_household_income, pct_bachelors_plus, commute_public_transit,
+      commercial_activity_score, transit_activity_score, optional nfh_*
     """
     name = row.get("neighborhood", "Unknown")
     borough = row.get("borough", "")
+    area_km2 = round(float(row.get("area_km2", 0) or 0), 1)
     total_poi = int(row.get("total_poi", 0))
+    unique_poi = int(row.get("unique_poi", 0) or 0)
+    ratio_retail_v = float(row.get("ratio_retail", 0) or 0)
     entropy = round(float(row.get("category_entropy", 0)), 2)
     ped = int(row.get("avg_pedestrian", 0))
     subway = int(row.get("subway_station_count", 0))
     density = round(float(row.get("poi_density_per_km2", 0)), 1)
+    retail_d = round(float(row.get("retail_density_per_km2", 0)), 2)
+    food_d = round(float(row.get("food_density_per_km2", 0)), 2)
+    mhi = row.get("median_household_income")
+    pct_bach = row.get("pct_bachelors_plus")
+    commute_pt = row.get("commute_public_transit")
     commercial = round(float(row.get("commercial_activity_score", 0)), 0)
     transit = round(float(row.get("transit_activity_score", 0)), 0)
     nfh_overall = row.get("nfh_overall_score")
@@ -75,13 +85,46 @@ def build_text_profile(row: pd.Series) -> str:
     if pd.notna(nfh_shocks):
         nfh_txt += f" Financial-shock resilience score is {float(nfh_shocks):.2f}."
 
+    # Retail share: ratio_retail is typically 0–1 (share of POIs)
+    rr_pct = ratio_retail_v * 100.0 if ratio_retail_v <= 1.0 else ratio_retail_v
+
+    mix_txt = (
+        f"{unique_poi} distinct business names; retail share of POIs about {rr_pct:.0f}%. "
+    )
+
+    soc_parts: list[str] = []
+    if pd.notna(mhi):
+        try:
+            soc_parts.append(f"median household income about ${int(float(mhi)):,}")
+        except (TypeError, ValueError):
+            pass
+    if pd.notna(pct_bach):
+        try:
+            soc_parts.append(f"about {float(pct_bach):.0f}% adults with bachelor's or higher (community profile)")
+        except (TypeError, ValueError):
+            pass
+    soc_txt = (" Community socioeconomic proxies: " + "; ".join(soc_parts) + ".") if soc_parts else ""
+
+    comm_txt = ""
+    if pd.notna(commute_pt):
+        try:
+            comm_txt = (
+                f" About {float(commute_pt):.0f}% of workers commute by public transit (community profile)."
+            )
+        except (TypeError, ValueError):
+            pass
+
     return (
         f"{name} in {borough}. "
+        f"CDTA area about {area_km2} km2. "
         f"{total_poi} points of interest with {biz_density} business density ({density}/km2). "
+        f"Retail license POI density {retail_d}/km2; food-category POI density {food_d}/km2. "
+        f"{mix_txt}"
         f"Business category diversity is {diversity} (entropy {entropy}). "
         f"{foot_traffic} foot traffic (avg {ped} pedestrians). "
         f"{subway} subway stations nearby. "
         f"Commercial activity score {commercial}, transit activity score {transit}."
+        f"{soc_txt}{comm_txt}"
         f"{nfh_txt}"
     )
 

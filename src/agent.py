@@ -32,14 +32,14 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Execute a read-only DuckDB SQL query against the table `neighborhoods`. "
             "The table contains one row per NYC neighborhood with columns: "
-            "neighborhood, cd, borough, area_km2, total_poi, unique_poi, "
-            "category_diversity, food, retail, other, ratio_retail, ratio_restaurant, "
+            "neighborhood, cd, borough, area_km2, total_poi, category_diversity, "
+            "food, other, num_restaurant, num_retail, ratio_retail, ratio_restaurant, ratio_food, "
             "category_entropy, avg_pedestrian, peak_pedestrian, pedestrian_count_points, "
             "subway_station_count, poi_density_per_km2, retail_density_per_km2, "
             "subway_density_per_km2, commercial_activity_score, transit_activity_score, "
-            "and neighborhood profile fields when present (e.g. median_household_income, "
+            "and neighborhood profile fields when present (e.g. nfh_median_income, "
             "pct_bachelors_plus, commute_public_transit, food_services, total_businesses, "
-            "pct_hispanic, pct_black, pct_asian). "
+            "nfh_overall_score, pct_hispanic, pct_black, pct_asian). "
             "Only SELECT statements are allowed."
         ),
         "input_schema": {
@@ -74,6 +74,7 @@ TOOLS: list[dict[str, Any]] = [
 
 # ── SQL execution (sandboxed to SELECT) ─────────────────────────────────────
 
+
 def _execute_sql(df: pd.DataFrame, sql: str) -> str:
     """Run *sql* against *df* registered as ``neighborhoods`` in DuckDB."""
     normalized = sql.strip().rstrip(";").upper()
@@ -90,6 +91,7 @@ def _execute_sql(df: pd.DataFrame, sql: str) -> str:
 
 
 # ── Agent loop ──────────────────────────────────────────────────────────────
+
 
 def run_agent(
     user_query: str,

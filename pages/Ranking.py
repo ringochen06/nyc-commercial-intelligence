@@ -35,7 +35,11 @@ from embeddings import (  # noqa: E402
     embed_neighborhood_features,
     embed_texts,
 )
-from feature_engineering import load_boundaries  # noqa: E402
+from config import (  # noqa: E402
+    CDTA_SHAPE_PATH,
+    load_cdta_gdf_for_map,
+    load_neighborhood_features,
+)
 
 DEFAULT_SOFT_QUERY = (
     "quiet residential area suitable for boutique retail with good subway access"
@@ -59,27 +63,7 @@ st.caption(
 
 # ── Load data ───────────────────────────────────────────────────────────────
 
-REPO_ROOT = _REPO
-
-DATA_PATH = REPO_ROOT / "data" / "processed" / "neighborhood_features_final.csv"
-
-CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
-
-
-@st.cache_data(show_spinner=False)
-def _cdta_geojson_for_map(shape_path_str: str):
-    gdf = load_boundaries(Path(shape_path_str))
-    out = gdf.copy()
-    out["map_key"] = out["cd"] + " | " + out["borough"]
-    return out
-
-
-@st.cache_data
-def load_data() -> pd.DataFrame:
-    return pd.read_csv(DATA_PATH)
-
-
-df_full = load_data()
+df_full = load_neighborhood_features()
 
 # ── Sidebar: Hard Filters ──────────────────────────────────────────────────
 
@@ -279,7 +263,7 @@ with st.expander("About zeros, nulls, and refreshing data", expanded=False):
 
 **If numbers look stale after changing the pipeline**
 
-- Regenerate with `python run_pipeline.py`, then in Streamlit use **Rerun** or **Clear cache** (menu) so `load_data()` picks up the new `neighborhood_features_final.csv`.
+- Regenerate with `python run_pipeline.py`, then in Streamlit use **Rerun** or **Clear cache** (menu) so the cached feature table picks up the new `neighborhood_features_final.csv`.
         """
     )
 
@@ -345,7 +329,7 @@ def get_all_embeddings():
 try:
     all_embeddings, all_texts = get_all_embeddings()
 
-    full_neighborhoods = load_data()["neighborhood"].tolist()
+    full_neighborhoods = df_full["neighborhood"].tolist()
     filtered_neighborhoods = df_filtered["neighborhood"].tolist()
     idx_map = {name: i for i, name in enumerate(full_neighborhoods)}
     filtered_indices = [idx_map[n] for n in filtered_neighborhoods if n in idx_map]
@@ -435,7 +419,7 @@ try:
         if not CDTA_SHAPE_PATH.is_file():
             st.caption(f"No shapefile at `{CDTA_SHAPE_PATH}` — map skipped.")
         else:
-            geo_gdf = _cdta_geojson_for_map(str(CDTA_SHAPE_PATH))
+            geo_gdf = load_cdta_gdf_for_map(CDTA_SHAPE_PATH)
             shape_geojson = geo_gdf.__geo_interface__
             loc_keys = df_filtered[["neighborhood", "cd", "borough"]].drop_duplicates(
                 subset=["neighborhood"], keep="first"
@@ -565,15 +549,15 @@ with col2:
         "| `borough` | Geographic context |\n"
         "| `area_km2` | CDTA footprint (spatial scale) |\n"
         "| `total_poi` | Business count |\n"
-        "| `unique_poi` | Distinct business names (business mix) |\n"
-        "| `ratio_retail` | Retail share of POIs (business mix) |\n"
+        "| `category_diversity` | Count of simplified business categories (mix) |\n"
+        "| `ratio_retail` | Retail license share of POIs (business mix) |\n"
         "| `category_entropy` | Industry diversity |\n"
         "| `avg_pedestrian` | Foot traffic level |\n"
         "| `subway_station_count` | Transit access |\n"
         "| `poi_density_per_km2` | All-POI density descriptor |\n"
         "| `retail_density_per_km2` | Simplified retail-category POI density (per km²) |\n"
         "| `food_density_per_km2` | Simplified food-category POI density (per km²) |\n"
-        "| `median_household_income` | Median household income (community district profile) |\n"
+        "| `nfh_median_income` | NFH median income (when column exists) |\n"
         "| `pct_bachelors_plus` | Share with bachelor's degree or higher |\n"
         "| `commute_public_transit` | Public transit commute share |\n"
         "| `commercial_activity_score` | Activity level |\n"

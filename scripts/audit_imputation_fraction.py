@@ -55,8 +55,12 @@ def main() -> None:
     df["_cd_join"] = df["cd"].map(normalize_cdta_join_key)
     nb = nbhd.copy()
     nb["_cd_join"] = nb["cd"].map(normalize_cdta_join_key)
-    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(subset=["_cd_join"], keep="first")
-    profile_cols = [c for c in nb.columns if c not in ("neighborhood", "borough", "cd", "_cd_join")]
+    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(
+        subset=["_cd_join"], keep="first"
+    )
+    profile_cols = [
+        c for c in nb.columns if c not in ("neighborhood", "borough", "cd", "_cd_join")
+    ]
     if profile_cols:
         df = df.merge(nb[["_cd_join"] + profile_cols], on="_cd_join", how="left")
     df = df.drop(columns=["_cd_join"])
@@ -89,7 +93,9 @@ def main() -> None:
         if "food" in df.columns:
             df["food_density_per_km2"] = safe_divide(df["food"], df["area_km2"])
         if "subway_station_count" in df.columns:
-            df["subway_density_per_km2"] = safe_divide(df["subway_station_count"], df["area_km2"])
+            df["subway_density_per_km2"] = safe_divide(
+                df["subway_station_count"], df["area_km2"]
+            )
 
     density_cols = [
         c
@@ -118,7 +124,9 @@ def main() -> None:
     poi_like_cols = [c for c in poi_like_cols if c in df.columns]
     retail_extra = ["ratio_retail", "retail_density_per_km2", "food_density_per_km2"]
     retail_extra = [c for c in retail_extra if c in df.columns]
-    subway_cols = [c for c in ["subway_station_count", "subway_density_per_km2"] if c in df.columns]
+    subway_cols = [
+        c for c in ["subway_station_count", "subway_density_per_km2"] if c in df.columns
+    ]
 
     block_poi = poi_like_cols + [c for c in retail_extra if c not in poi_like_cols]
     block_poi = list(dict.fromkeys(block_poi))
@@ -126,7 +134,11 @@ def main() -> None:
     poi_nan_cells = int(pre_poi.isna().sum().sum())
     poi_cells = int(pre_poi.size)
 
-    pre_sub = df[subway_cols].apply(pd.to_numeric, errors="coerce") if subway_cols else pd.DataFrame()
+    pre_sub = (
+        df[subway_cols].apply(pd.to_numeric, errors="coerce")
+        if subway_cols
+        else pd.DataFrame()
+    )
     subway_nan_cells = int(pre_sub.isna().sum().sum()) if not pre_sub.empty else 0
     subway_cells = int(pre_sub.size) if not pre_sub.empty else 0
 
@@ -174,13 +186,28 @@ def main() -> None:
     # Double count: poi_block includes poi_density which is same as density_nan for poi_density row
     # poi_nan_cells already counts poi_density nan; density_nan_cells also counts poi_density — fix:
     poi_only_cols = [c for c in block_poi if c not in density_cols]
-    pre_poi_only = df[poi_only_cols].apply(pd.to_numeric, errors="coerce") if poi_only_cols else pd.DataFrame()
+    pre_poi_only = (
+        df[poi_only_cols].apply(pd.to_numeric, errors="coerce")
+        if poi_only_cols
+        else pd.DataFrame()
+    )
     poi_only_nan = int(pre_poi_only.isna().sum().sum()) if not pre_poi_only.empty else 0
 
-    total_nan_unique_estimate = profile_nan_cells + density_nan_cells + poi_only_nan + subway_nan_cells + ped_nan_cells + ped_pts_nan
+    total_nan_unique_estimate = (
+        profile_nan_cells
+        + density_nan_cells
+        + poi_only_nan
+        + subway_nan_cells
+        + ped_nan_cells
+        + ped_pts_nan
+    )
 
-    final_cols = pd.read_csv(processed / "neighborhood_features_final.csv", nrows=0).columns
-    numeric_final_cells = n_rows * len([c for c in final_cols if c not in ("neighborhood", "cd", "borough")])
+    final_cols = pd.read_csv(
+        processed / "neighborhood_features_final.csv", nrows=0
+    ).columns
+    numeric_final_cells = n_rows * len(
+        [c for c in final_cols if c not in ("neighborhood", "cd", "borough")]
+    )
 
     def pct(part: float, whole: float) -> str:
         if whole <= 0:
@@ -192,32 +219,58 @@ def main() -> None:
     print(f"Profile columns (from nbhd_clean): {len(profile_cols)}")
     print()
     print("1) MOCEJ + NFH profile block — NaN before borough → city median fill:")
-    print(f"   NaN cells: {profile_nan_cells} / {profile_cells}  ({pct(profile_nan_cells, profile_cells)})")
-    print(f"   Rows with ≥1 NaN in profile: {rows_any_profile_nan} / {n_rows}  ({pct(rows_any_profile_nan, n_rows)})")
+    print(
+        f"   NaN cells: {profile_nan_cells} / {profile_cells}  ({pct(profile_nan_cells, profile_cells)})"
+    )
+    print(
+        f"   Rows with ≥1 NaN in profile: {rows_any_profile_nan} / {n_rows}  ({pct(rows_any_profile_nan, n_rows)})"
+    )
     print()
-    print("2) Density columns — NaN before fillna(0) (mostly divide-by-zero / missing inputs):")
-    print(f"   NaN cells: {density_nan_cells} / {density_cells}  ({pct(density_nan_cells, density_cells)})")
+    print(
+        "2) Density columns — NaN before fillna(0) (mostly divide-by-zero / missing inputs):"
+    )
+    print(
+        f"   NaN cells: {density_nan_cells} / {density_cells}  ({pct(density_nan_cells, density_cells)})"
+    )
     print()
-    print("3) POI / retail block (incl. densities listed twice above) — NaN before fillna(0):")
+    print(
+        "3) POI / retail block (incl. densities listed twice above) — NaN before fillna(0):"
+    )
     print(f"   NaN cells: {poi_nan_cells} / {poi_cells}")
     poi_only_total = max(len(poi_only_cols) * n_rows, 1)
-    print(f"   Same but excluding density cols (to avoid double-count with §2): {poi_only_nan} / {poi_only_total}")
+    print(
+        f"   Same but excluding density cols (to avoid double-count with §2): {poi_only_nan} / {poi_only_total}"
+    )
     print()
     print("4) Subway — NaN before fillna(0):")
-    print(f"   NaN cells: {subway_nan_cells} / {max(subway_cells, 1)}  ({pct(subway_nan_cells, subway_cells)})")
+    print(
+        f"   NaN cells: {subway_nan_cells} / {max(subway_cells, 1)}  ({pct(subway_nan_cells, subway_cells)})"
+    )
     print()
     print("5) Pedestrian — NaN before column-mean fill:")
-    print(f"   NaN cells: {ped_nan_cells} / {max(ped_cells, 1)}  ({pct(ped_nan_cells, ped_cells)})")
-    print(f"   Rows with ≥1 NaN: {rows_any_ped_nan} / {n_rows}  ({pct(rows_any_ped_nan, n_rows)})")
+    print(
+        f"   NaN cells: {ped_nan_cells} / {max(ped_cells, 1)}  ({pct(ped_nan_cells, ped_cells)})"
+    )
+    print(
+        f"   Rows with ≥1 NaN: {rows_any_ped_nan} / {n_rows}  ({pct(rows_any_ped_nan, n_rows)})"
+    )
     if ped_pts_cells:
-        print(f"   pedestrian_count_points NaN: {ped_pts_nan} / {ped_pts_cells}  ({pct(ped_pts_nan, ped_pts_cells)})")
+        print(
+            f"   pedestrian_count_points NaN: {ped_pts_nan} / {ped_pts_cells}  ({pct(ped_pts_nan, ped_pts_cells)})"
+        )
     print()
     print("--- Headline (no double-count between §2 density and §3 poi_density) ---")
     print(f"   Sum of unique-ish NaN events: {total_nan_unique_estimate}")
-    print(f"   Rough share of all numeric cells in final CSV (~{numeric_final_cells}): {pct(total_nan_unique_estimate, numeric_final_cells)}")
+    print(
+        f"   Rough share of all numeric cells in final CSV (~{numeric_final_cells}): {pct(total_nan_unique_estimate, numeric_final_cells)}"
+    )
     print()
-    print("Rows with any NaN in profile OR poi-only OR subway OR ped OR ped_pts (before fills):")
-    print(f"   {rows_touched_by_any_fill} / {n_rows}  ({pct(rows_touched_by_any_fill, n_rows)})")
+    print(
+        "Rows with any NaN in profile OR poi-only OR subway OR ped OR ped_pts (before fills):"
+    )
+    print(
+        f"   {rows_touched_by_any_fill} / {n_rows}  ({pct(rows_touched_by_any_fill, n_rows)})"
+    )
 
 
 if __name__ == "__main__":

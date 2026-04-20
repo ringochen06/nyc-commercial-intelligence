@@ -7,6 +7,57 @@ import numpy as np
 import pandas as pd
 import re
 
+# =========================================================
+# Community District / CDTA join keys (e.g. MN01, BK18)
+# =========================================================
+
+
+def normalize_cdta_join_key(cd: str | float | None) -> Optional[str]:
+    """
+    Map Community District / CDTA-style strings to DCP CDTA2020-style keys (e.g. MN01, BK18).
+
+    Used when cleaning neighborhood profiles / NFH and when merging onto CDTA polygons.
+    Handles:
+    - NYC 3-digit Geosupport codes (101 → MN01)
+    - Short codes (MN1, BK08)
+    - Long labels containing borough token + district number
+    - NFH / Planning exports: "BX Community District 8", "BX Community Districts 3 & 6"
+    """
+    if cd is None or (isinstance(cd, float) and pd.isna(cd)):
+        return None
+    s = str(cd).strip().upper()
+    if not s or s == "NAN":
+        return None
+
+    if re.fullmatch(r"\d{3}", s):
+        boro_digit, dist_str = s[0], s[1:3]
+        bmap = {"1": "MN", "2": "BX", "3": "BK", "4": "QN", "5": "SI"}
+        pref = bmap.get(boro_digit)
+        if pref is None:
+            return None
+        dist = int(dist_str)
+        if dist < 1:
+            return None
+        return f"{pref}{dist:02d}"
+
+    m = re.match(r"^(BX|BK|MN|QN|SI)\s*0*(\d{1,2})$", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+    m = re.search(r"(BX|BK|MN|QN|SI)\s*0*(\d{1,2})\b", s)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)):02d}"
+
+    m = re.search(
+        r"(BX|BK|MN|QN|SI)\s+COMMUNITY\s+DISTRICTS?\s+(\d{1,2})(?:\s*&\s*(\d{1,2}))?",
+        s,
+    )
+    if m:
+        pref = m.group(1).upper()
+        dist = int(m.group(2))
+        return f"{pref}{dist:02d}"
+
+    return None
+
 
 # =========================================================
 # Basic helpers
@@ -64,50 +115,6 @@ def clean_numeric_string(series: pd.Series) -> pd.Series:
         .str.strip(),
         errors="coerce",
     )
-
-
-def normalize_cd_code(cd: str | float | None) -> Optional[str]:
-    """
-    Normalize CD / CDTA-style strings to DCP-style keys (e.g. MN01, BK18).
-
-    Keep logic aligned with ``feature_engineering.normalize_cdta_join_key`` so
-    NFH merges and the CDTA master merge use the same join key.
-    """
-    if cd is None or (isinstance(cd, float) and pd.isna(cd)):
-        return None
-    s = str(cd).strip().upper()
-    if not s or s == "NAN":
-        return None
-
-    if re.fullmatch(r"\d{3}", s):
-        boro_digit, dist_str = s[0], s[1:3]
-        bmap = {"1": "MN", "2": "BX", "3": "BK", "4": "QN", "5": "SI"}
-        pref = bmap.get(boro_digit)
-        if pref is None:
-            return None
-        dist = int(dist_str)
-        if dist < 1:
-            return None
-        return f"{pref}{dist:02d}"
-
-    m = re.match(r"^(BX|BK|MN|QN|SI)\s*0*(\d{1,2})$", s)
-    if m:
-        return f"{m.group(1)}{int(m.group(2)):02d}"
-    m = re.search(r"(BX|BK|MN|QN|SI)\s*0*(\d{1,2})\b", s)
-    if m:
-        return f"{m.group(1)}{int(m.group(2)):02d}"
-
-    # NFH / Planning exports: "BX Community District 8", "BX Community Districts 3 & 6"
-    m = re.search(
-        r"(BX|BK|MN|QN|SI)\s+COMMUNITY\s+DISTRICTS?\s+(\d{1,2})(?:\s*&\s*(\d{1,2}))?",
-        s,
-    )
-    if m:
-        pref = m.group(1).upper()
-        dist = int(m.group(2))
-        return f"{pref}{dist:02d}"
-
-    return None
 
 
 # =========================================================
@@ -398,7 +405,7 @@ def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
     }
 
     base = df_nfh[base_cols].copy()
-    base["cd"] = base["CD"].map(normalize_cd_code)
+    base["cd"] = base["CD"].map(normalize_cdta_join_key)
     base = base.dropna(subset=["cd"]).drop_duplicates(subset=["cd"], keep="first")
     base = base.rename(
         columns={
@@ -421,7 +428,7 @@ def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
         base[col] = clean_numeric_string(base[col])
 
     goals = df_nfh[goal_cols].copy()
-    goals["cd"] = goals["CD"].map(normalize_cd_code)
+    goals["cd"] = goals["CD"].map(normalize_cdta_join_key)
     goals = goals.dropna(subset=["cd"])
     goals = goals[goals["Goal"].isin(goal_map.keys())].copy()
     goals["metric"] = goals["Goal"].map(goal_map)
@@ -545,7 +552,7 @@ def clean_neighborhood_profiles(
     if nfh_path is not None and Path(nfh_path).exists():
         nfh = clean_nfh_profiles(nfh_path)
         if not nfh.empty:
-            df["_cd_norm"] = df["cd"].map(normalize_cd_code)
+            df["_cd_norm"] = df["cd"].map(normalize_cdta_join_key)
             df = df.merge(
                 nfh.rename(columns={"cd": "_cd_norm"}),
                 on="_cd_norm",

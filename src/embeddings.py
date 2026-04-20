@@ -22,6 +22,11 @@ import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
 
+try:
+    from config import NEIGHBORHOOD_FEATURES_CSV
+except ImportError:
+    from src.config import NEIGHBORHOOD_FEATURES_CSV
+
 load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -146,22 +151,23 @@ def get_runtime_backend() -> str:
 
 # ── Text profile builder ────────────────────────────────────────────────────
 
+
 def build_text_profile(row: pd.Series) -> str:
     """
     Compose a short natural-language profile for one neighborhood row.
 
     Columns used (from neighborhood_features_final.csv):
-      neighborhood, borough, area_km2, total_poi, unique_poi, ratio_retail,
+      neighborhood, borough, area_km2, total_poi, category_diversity, ratio_retail,
       category_entropy, avg_pedestrian, subway_station_count, poi_density_per_km2,
       retail_density_per_km2, food_density_per_km2,
-      median_household_income, pct_bachelors_plus, commute_public_transit,
-      commercial_activity_score, transit_activity_score, optional nfh_*
+      nfh_median_income, pct_bachelors_plus, commute_public_transit,
+      commercial_activity_score, transit_activity_score, optional nfh_* scores (no NFH ranks)
     """
     name = row.get("neighborhood", "Unknown")
     borough = row.get("borough", "")
     area_km2 = round(float(row.get("area_km2", 0) or 0), 1)
     total_poi = int(row.get("total_poi", 0))
-    unique_poi = int(row.get("unique_poi", 0) or 0)
+    cat_div = int(row.get("category_diversity", 0) or 0)
     ratio_retail_v = float(row.get("ratio_retail", 0) or 0)
     entropy = round(float(row.get("category_entropy", 0)), 2)
     ped = int(row.get("avg_pedestrian", 0))
@@ -169,7 +175,7 @@ def build_text_profile(row: pd.Series) -> str:
     density = round(float(row.get("poi_density_per_km2", 0)), 1)
     retail_d = round(float(row.get("retail_density_per_km2", 0)), 2)
     food_d = round(float(row.get("food_density_per_km2", 0)), 2)
-    mhi = row.get("median_household_income")
+    mhi = row.get("nfh_median_income")
     pct_bach = row.get("pct_bachelors_plus")
     commute_pt = row.get("commute_public_transit")
     commercial = round(float(row.get("commercial_activity_score", 0)), 0)
@@ -179,22 +185,19 @@ def build_text_profile(row: pd.Series) -> str:
 
     # Qualitative descriptors
     foot_traffic = (
-        "very high" if ped > 5000
-        else "high" if ped > 3000
-        else "moderate" if ped > 1500
-        else "low"
+        "very high"
+        if ped > 5000
+        else "high" if ped > 3000 else "moderate" if ped > 1500 else "low"
     )
     biz_density = (
-        "extremely dense" if density > 30
-        else "dense" if density > 10
-        else "moderate" if density > 3
-        else "sparse"
+        "extremely dense"
+        if density > 30
+        else "dense" if density > 10 else "moderate" if density > 3 else "sparse"
     )
     diversity = (
-        "highly diverse" if entropy > 0.8
-        else "diverse" if entropy > 0.6
-        else "moderate" if entropy > 0.4
-        else "limited"
+        "highly diverse"
+        if entropy > 0.8
+        else "diverse" if entropy > 0.6 else "moderate" if entropy > 0.4 else "limited"
     )
     nfh_txt = ""
     if pd.notna(nfh_overall):
@@ -205,29 +208,31 @@ def build_text_profile(row: pd.Series) -> str:
     # Retail share: ratio_retail is typically 0–1 (share of POIs)
     rr_pct = ratio_retail_v * 100.0 if ratio_retail_v <= 1.0 else ratio_retail_v
 
-    mix_txt = (
-        f"{unique_poi} distinct business names; retail share of POIs about {rr_pct:.0f}%. "
-    )
+    mix_txt = f"{cat_div} simplified category groups; retail license share of POIs about {rr_pct:.0f}%. "
 
     soc_parts: list[str] = []
     if pd.notna(mhi):
         try:
-            soc_parts.append(f"median household income about ${int(float(mhi)):,}")
+            soc_parts.append(f"NFH median income about ${int(float(mhi)):,}")
         except (TypeError, ValueError):
             pass
     if pd.notna(pct_bach):
         try:
-            soc_parts.append(f"about {float(pct_bach):.0f}% adults with bachelor's or higher (community profile)")
+            soc_parts.append(
+                f"about {float(pct_bach):.0f}% adults with bachelor's or higher (community profile)"
+            )
         except (TypeError, ValueError):
             pass
-    soc_txt = (" Community socioeconomic proxies: " + "; ".join(soc_parts) + ".") if soc_parts else ""
+    soc_txt = (
+        (" Community socioeconomic proxies: " + "; ".join(soc_parts) + ".")
+        if soc_parts
+        else ""
+    )
 
     comm_txt = ""
     if pd.notna(commute_pt):
         try:
-            comm_txt = (
-                f" About {float(commute_pt):.0f}% of workers commute by public transit (community profile)."
-            )
+            comm_txt = f" About {float(commute_pt):.0f}% of workers commute by public transit (community profile)."
         except (TypeError, ValueError):
             pass
 
@@ -399,6 +404,7 @@ def load_embeddings(*, backend: str | None = None) -> tuple[np.ndarray, list[str
 
 # ── Cosine similarity ───────────────────────────────────────────────────────
 
+
 def cosine_similarity(query_vec: np.ndarray, corpus: np.ndarray) -> np.ndarray:
     """Cosine similarity between one query vector and a corpus matrix."""
     query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-12)
@@ -407,6 +413,7 @@ def cosine_similarity(query_vec: np.ndarray, corpus: np.ndarray) -> np.ndarray:
 
 
 # ── Main (CLI) ──────────────────────────────────────────────────────────────
+
 
 def embed_neighborhood_features(
     csv_path: str | Path | None = None, *, force: bool = False
@@ -423,7 +430,7 @@ def embed_neighborhood_features(
             return cached
 
     if csv_path is None:
-        csv_path = REPO_ROOT / "data" / "processed" / "neighborhood_features_final.csv"
+        csv_path = NEIGHBORHOOD_FEATURES_CSV
     df = pd.read_csv(csv_path)
     texts = build_all_profiles(df)
     embeddings = embed_texts(texts, backend=requested_backend)
@@ -437,7 +444,9 @@ if __name__ == "__main__":
 
     force = "--force" in sys.argv
     emb, texts = embed_neighborhood_features(force=force)
+    backend = _ACTIVE_EMBEDDING_BACKEND or _choose_backend()
+    embeddings_path, _, _ = _cache_paths(backend)
     print(f"Embedded {len(texts)} neighborhoods -> shape {emb.shape}")
-    print(f"Saved to {EMBEDDINGS_PATH}")
-    print(f"Backend: {_ACTIVE_EMBEDDING_BACKEND}")
+    print(f"Saved to {embeddings_path}")
+    print(f"Backend: {backend}")
     print(f"\nSample profile:\n{texts[0]}")

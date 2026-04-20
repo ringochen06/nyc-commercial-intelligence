@@ -82,7 +82,7 @@ Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood 
 
 **Purpose**
 
-- Joined onto the CDTA master table by a normalized district key (`normalize_cdta_join_key` in `src/feature_engineering.py`). NFH source rows use labels like `BX Community District 8`; these are normalized to codes such as `BX08` in `src/data_processing.py` so they align with the same join logic as MOCEJ rows.
+- Joined onto the CDTA master table by a normalized district key (`normalize_cdta_join_key` in `src/data_processing.py`). NFH source rows use labels like `BX Community District 8`; these are normalized to codes such as `BX08` in the same module so they align with the same join logic as MOCEJ rows.
 
 ---
 
@@ -160,7 +160,7 @@ Details and setup: **root `README.md`**.
 
 1. Raw datasets are cleaned (`src/data_processing.py`) → `*_clean.csv` under `data/processed/`.  
 2. Point layers are spatially joined to CDTA boundaries; features are aggregated per CDTA (`src/feature_engineering.py`).  
-3. **`nbhd_clean` is merged** onto the CDTA master table using a normalized district code (see `normalize_cdta_join_key` in `src/feature_engineering.py`).  
+3. **`nbhd_clean` is merged** onto the CDTA master table using a normalized district code (see `normalize_cdta_join_key` in `src/data_processing.py`).  
 4. **Missing values (spatial / activity columns):** POI / retail / subway counts and densities are filled with **0** where appropriate. **Pedestrian:** `avg_pedestrian` / `peak_pedestrian` use **mean** then **0** for any residual NaN; `pedestrian_count_points` missing → **0**.  
 5. **Interaction scores** (`commercial_activity_score`, `transit_activity_score`) are computed **after** those fills so they reflect imputed inputs, not premature `× 0` from NaNs.  
 6. **Profile + `nfh_*` numeric columns** after the merge: **borough median**, then **citywide median**, for any remaining NaN.  

@@ -7,17 +7,49 @@ Do not delegate clustering to scikit-learn here.
 
 from __future__ import annotations
 
-import numpy as np
-from pathlib import Path
 import hashlib
+from pathlib import Path
+
+import numpy as np
 
 try:
-    from . import serialization
+    import h5py
 except ImportError:
-    # Loaded as top-level `kmeans_numpy` when `src/` is on sys.path (e.g. Streamlit `app.py`).
-    import serialization
+    h5py = None
 
 CLUSTER_PATH = Path("outputs/clusters/")
+
+
+def _save_hdf5_dict(data: dict, path: Path) -> None:
+    if h5py is None:
+        raise ImportError("h5py is required for cluster caching. pip install h5py")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "a") as f:
+        for key, value in data.items():
+            if key in f:
+                del f[key]
+            if isinstance(value, np.ndarray):
+                f.create_dataset(key, data=value)
+            elif isinstance(value, (list, tuple)):
+                f.create_dataset(key, data=np.array(value))
+            elif isinstance(value, (str, int, float, bool)):
+                f.create_dataset(key, data=value)
+            else:
+                f.create_dataset(key, data=np.array(value))
+
+
+def _load_hdf5_dict(path: Path) -> dict:
+    if h5py is None:
+        raise ImportError("h5py is required for cluster caching. pip install h5py")
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"HDF5 file not found: {path}")
+    data: dict = {}
+    with h5py.File(path, "r") as f:
+        for key in f.keys():
+            data[key] = f[key][()]
+    return data
 
 def _features_hash(features: list[str]) -> str:
     """Generate a short hash from a sorted list of feature names."""
@@ -29,9 +61,6 @@ def pairwise_squared_euclidean(X: np.ndarray, C: np.ndarray) -> np.ndarray:
     """Squared Euclidean distances between rows of X (n, d) and rows of C (k, d) -> (n, k)."""
     return np.linalg.norm(X[:, np.newaxis] - C, axis=2) ** 2
 
-def pairwise_absolute_distance(X: np.ndarray, C: np.ndarray) -> np.ndarray:
-    """Absolute distances (L1) between rows of X and C, same shape as above."""
-    return np.sum(np.abs(X[:, np.newaxis] - C), axis=2)
 
 def kmeans(
     X: np.ndarray,
@@ -246,7 +275,7 @@ def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroi
         f"labels_{feat_key}": labels,
         f"centroids_{feat_key}": centroids,
     }
-    serialization.save_hdf5_dict(data, path)
+    _save_hdf5_dict(data, path)
 
 def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     """Load persisted clustering results from HDF5 file by k and features.
@@ -260,7 +289,7 @@ def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[
     if not path.exists():
         raise FileNotFoundError(f"Cluster cache file not found: {path}")
     
-    data = serialization.load_hdf5_dict(path)
+    data = _load_hdf5_dict(path)
     
     labels_key = f"labels_{feat_key}"
     centroids_key = f"centroids_{feat_key}"

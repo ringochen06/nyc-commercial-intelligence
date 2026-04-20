@@ -20,16 +20,19 @@ from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from embeddings import cosine_similarity, get_runtime_backend, load_embeddings  # noqa: E402
-from feature_engineering import load_boundaries  # noqa: E402
-from kmeans_numpy import compute_inertia, kmeans, kmeans_with_caching, silhouette_score  # noqa: E402
+from kmeans_numpy import (
+    compute_inertia,
+    kmeans,
+    kmeans_with_caching,
+    silhouette_score,
+)  # noqa: E402
+from config import (  # noqa: E402
+    CDTA_SHAPE_PATH,
+    load_cdta_gdf_for_map,
+    load_neighborhood_features,
+)
 
 # ── Constants ────────────────────────────────────────────────────────────────
-
-REPO_ROOT = Path(__file__).resolve().parent
-
-DATA_PATH = REPO_ROOT / "data" / "processed" / "neighborhood_features_final.csv"
-
-CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
 
 CANDIDATE_FEATURES: list[str] = [
     "total_poi",
@@ -39,14 +42,13 @@ CANDIDATE_FEATURES: list[str] = [
     "commercial_activity_score",
     "transit_activity_score",
     "category_entropy",
-    "unique_poi",
     "peak_pedestrian",
     "retail_density_per_km2",
     "food_density_per_km2",
     "subway_density_per_km2",
     "ratio_retail",
     "ratio_food",
-    "food"
+    "food",
 ]
 
 DEFAULT_FEATURES: list[str] = [
@@ -76,12 +78,7 @@ st.caption(
 # ── Load data ────────────────────────────────────────────────────────────────
 
 
-@st.cache_data
-def load_data() -> pd.DataFrame:
-    return pd.read_csv(DATA_PATH)
-
-
-df_full = load_data()
+df_full = load_neighborhood_features()
 
 # ── Sidebar controls ─────────────────────────────────────────────────────────
 
@@ -163,10 +160,26 @@ if effective_max_k < max_k:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 CLUSTER_PALETTE: list[str] = [
-    "#4A90D9", "#E74C3C", "#2ECC71", "#F39C12", "#9B59B6",
-    "#1ABC9C", "#E67E22", "#3498DB", "#E91E63", "#00BCD4",
-    "#8BC34A", "#FF5722", "#795548", "#607D8B", "#FF9800",
-    "#673AB7", "#009688", "#F44336", "#CDDC39", "#03A9F4",
+    "#4A90D9",
+    "#E74C3C",
+    "#2ECC71",
+    "#F39C12",
+    "#9B59B6",
+    "#1ABC9C",
+    "#E67E22",
+    "#3498DB",
+    "#E91E63",
+    "#00BCD4",
+    "#8BC34A",
+    "#FF5722",
+    "#795548",
+    "#607D8B",
+    "#FF9800",
+    "#673AB7",
+    "#009688",
+    "#F44336",
+    "#CDDC39",
+    "#03A9F4",
 ]
 
 
@@ -184,10 +197,12 @@ def find_elbow(k_range: list[int], inertias: list[float]) -> int:
     # Direction vector of the chord from first to last point
     dx = ks_n[-1] - ks_n[0]
     dy = ys_n[-1] - ys_n[0]
-    norm = np.sqrt(dx ** 2 + dy ** 2) + 1e-12
+    norm = np.sqrt(dx**2 + dy**2) + 1e-12
     # Perpendicular distance of each point from the chord
-    distances = np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
-    return k_range[int(np.argmax(distances))] 
+    distances = (
+        np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
+    )
+    return k_range[int(np.argmax(distances))]
 
 
 def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
@@ -202,12 +217,11 @@ def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
     """
     if len(k_range) <= 3:
         return k_range[np.argmin(inertias)]
-        #return find_elbow(k_range, inertias)
+        # return find_elbow(k_range, inertias)
 
     ys = np.array(inertias, dtype=float)
     local_minima = [
-        i for i in range(1, len(ys) - 1)
-        if ys[i] < ys[i - 1] and ys[i] < ys[i + 1]
+        i for i in range(1, len(ys) - 1) if ys[i] < ys[i - 1] and ys[i] < ys[i + 1]
     ]
 
     if not local_minima:
@@ -218,19 +232,8 @@ def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
     return k_range[best_i]
 
 
-
-
 def _color_for_cluster(c: int) -> str:
     return CLUSTER_PALETTE[c % len(CLUSTER_PALETTE)]
-
-
-@st.cache_data(show_spinner=False)
-def _cdta_geometry_table(shape_path_str: str) -> pd.DataFrame:
-    """One row per CDTA polygon in WGS84, with a stable map join key."""
-    gdf = load_boundaries(Path(shape_path_str))
-    out = gdf.copy()
-    out["map_key"] = out["cd"] + " | " + out["borough"]
-    return out[["neighborhood", "cd", "borough", "map_key", "geometry"]].copy()
 
 
 def _cluster_semantics_from_embeddings(
@@ -464,7 +467,9 @@ if "ks_k_range" in st.session_state:
         f"Scatter, map, centroid bars, and notes below show all **{viz_k}** clusters."
     )
 
-    viz_labels, viz_centroids, _ = kmeans_with_caching(selected_features, X_s, viz_k, random_state=42)
+    viz_labels, viz_centroids, _ = kmeans_with_caching(
+        selected_features, X_s, viz_k, random_state=42
+    )
 
     # Share with Ranking page: neighborhood → cluster id, and per-cluster brief text
     _names_v = df_s["neighborhood"].astype(str).tolist()
@@ -472,7 +477,8 @@ if "ks_k_range" in st.session_state:
         _names_v[i]: int(viz_labels[i]) for i in range(len(_names_v))
     }
     st.session_state["ks_cluster_brief"] = {
-        c: _cluster_brief_description(viz_centroids[c], features_s) for c in range(viz_k)
+        c: _cluster_brief_description(viz_centroids[c], features_s)
+        for c in range(viz_k)
     }
     st.session_state["ks_cluster_k"] = int(viz_k)
 
@@ -482,8 +488,26 @@ if "ks_k_range" in st.session_state:
 
     with col_left:
         st.markdown("**Feature Scatter**")
-        xf = st.selectbox("X axis", options=features_s, index=features_s.index("avg_pedestrian") if "avg_pedestrian" in features_s else 0, key="scatter_x")
-        yf = st.selectbox("Y axis", options=features_s, index=features_s.index("total_poi") if "total_poi" in features_s else min(1, len(features_s) - 1), key="scatter_y")
+        xf = st.selectbox(
+            "X axis",
+            options=features_s,
+            index=(
+                features_s.index("avg_pedestrian")
+                if "avg_pedestrian" in features_s
+                else 0
+            ),
+            key="scatter_x",
+        )
+        yf = st.selectbox(
+            "Y axis",
+            options=features_s,
+            index=(
+                features_s.index("total_poi")
+                if "total_poi" in features_s
+                else min(1, len(features_s) - 1)
+            ),
+            key="scatter_y",
+        )
 
         xi = features_s.index(xf)
         yi = features_s.index(yf)
@@ -492,16 +516,26 @@ if "ks_k_range" in st.session_state:
 
         for c in range(viz_k):
             mask = viz_labels == c
-            scatter_fig.add_trace(go.Scatter(
-                x=X_raw_s[mask, xi],
-                y=X_raw_s[mask, yi],
-                mode="markers",
-                marker=dict(size=9, color=_color_for_cluster(c), opacity=0.85,
-                            line=dict(width=0.5, color="white")),
-                name=f"Cluster {c}",
-                text=df_s["neighborhood"].values[mask],
-                hovertemplate="<b>%{text}</b><br>" + xf + ": %{x:.1f}<br>" + yf + ": %{y:.1f}<extra></extra>",
-            ))
+            scatter_fig.add_trace(
+                go.Scatter(
+                    x=X_raw_s[mask, xi],
+                    y=X_raw_s[mask, yi],
+                    mode="markers",
+                    marker=dict(
+                        size=9,
+                        color=_color_for_cluster(c),
+                        opacity=0.85,
+                        line=dict(width=0.5, color="white"),
+                    ),
+                    name=f"Cluster {c}",
+                    text=df_s["neighborhood"].values[mask],
+                    hovertemplate="<b>%{text}</b><br>"
+                    + xf
+                    + ": %{x:.1f}<br>"
+                    + yf
+                    + ": %{y:.1f}<extra></extra>",
+                )
+            )
 
         # Centroid stars (in raw space: centroid in z-score → back to raw)
         x_mean = X_raw_s.mean(axis=0)
@@ -509,16 +543,26 @@ if "ks_k_range" in st.session_state:
         centroids_raw = viz_centroids * x_std + x_mean
 
         for c in range(viz_k):
-            scatter_fig.add_trace(go.Scatter(
-                x=[centroids_raw[c, xi]],
-                y=[centroids_raw[c, yi]],
-                mode="markers",
-                marker=dict(size=18, symbol="star", color=_color_for_cluster(c),
-                            line=dict(width=1.5, color="black")),
-                name=f"Centroid {c}",
-                showlegend=False,
-                hovertemplate=f"<b>Centroid {c}</b><br>" + xf + ": %{x:.2f}<br>" + yf + ": %{y:.2f}<extra></extra>",
-            ))
+            scatter_fig.add_trace(
+                go.Scatter(
+                    x=[centroids_raw[c, xi]],
+                    y=[centroids_raw[c, yi]],
+                    mode="markers",
+                    marker=dict(
+                        size=18,
+                        symbol="star",
+                        color=_color_for_cluster(c),
+                        line=dict(width=1.5, color="black"),
+                    ),
+                    name=f"Centroid {c}",
+                    showlegend=False,
+                    hovertemplate=f"<b>Centroid {c}</b><br>"
+                    + xf
+                    + ": %{x:.2f}<br>"
+                    + yf
+                    + ": %{y:.2f}<extra></extra>",
+                )
+            )
 
         scatter_fig.update_layout(
             xaxis_title=xf,
@@ -536,13 +580,15 @@ if "ks_k_range" in st.session_state:
 
         bar_fig = go.Figure()
         for c in range(viz_k):
-            bar_fig.add_trace(go.Bar(
-                name=f"Cluster {c}",
-                x=features_s,
-                y=viz_centroids[c].tolist(),
-                marker_color=_color_for_cluster(c),
-                opacity=0.85,
-            ))
+            bar_fig.add_trace(
+                go.Bar(
+                    name=f"Cluster {c}",
+                    x=features_s,
+                    y=viz_centroids[c].tolist(),
+                    marker_color=_color_for_cluster(c),
+                    opacity=0.85,
+                )
+            )
 
         bar_fig.update_layout(
             barmode="group",
@@ -565,7 +611,8 @@ if "ks_k_range" in st.session_state:
             "The CDTA shapefile is normally under `data/raw/nyc_boundaries/`."
         )
     else:
-        shape_df = _cdta_geometry_table(str(CDTA_SHAPE_PATH))
+        shape_gdf = load_cdta_gdf_for_map(CDTA_SHAPE_PATH)
+        shape_df = shape_gdf[["neighborhood", "cd", "borough", "map_key", "geometry"]]
         shape_geojson = shape_df.__geo_interface__
         map_df = df_s[["neighborhood", "cd", "borough"]].copy()
         map_df["cluster"] = viz_labels.astype(int)
@@ -585,7 +632,9 @@ if "ks_k_range" in st.session_state:
         if map_plot.empty:
             st.warning("No polygons to plot on the map.")
         else:
-            map_plot["cluster_label"] = map_plot["cluster"].map(lambda c: f"Cluster {c}")
+            map_plot["cluster_label"] = map_plot["cluster"].map(
+                lambda c: f"Cluster {c}"
+            )
             map_fig = go.Figure()
             for c in range(viz_k):
                 sub = map_plot[map_plot["cluster"] == c]
@@ -608,8 +657,7 @@ if "ks_k_range" in st.session_state:
                         name=f"Cluster {c}",
                         text=sub["neighborhood"] + " (" + sub["cd"] + ")",
                         hovertemplate=(
-                            "<b>%{text}</b><br>"
-                            "cluster=" + str(c) + "<extra></extra>"
+                            "<b>%{text}</b><br>" "cluster=" + str(c) + "<extra></extra>"
                         ),
                     )
                 )
@@ -619,7 +667,9 @@ if "ks_k_range" in st.session_state:
             map_fig.update_layout(
                 height=480,
                 margin=dict(l=0, r=0, t=8, b=0),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                ),
                 mapbox=dict(
                     style="open-street-map",
                     center=dict(lat=lat0, lon=lon0),
@@ -648,7 +698,9 @@ if "ks_k_range" in st.session_state:
             c = int(block["cluster"])
             n_cluster = int(block["n"])
             reps = block["reps"]
-            with st.expander(f"Cluster {c} — n={n_cluster} neighborhoods", expanded=(c == 0)):
+            with st.expander(
+                f"Cluster {c} — n={n_cluster} neighborhoods", expanded=(c == 0)
+            ):
                 st.markdown(
                     f"**Brief description:** {_cluster_brief_description(viz_centroids[c], features_s)}"
                 )
@@ -672,12 +724,14 @@ if "ks_k_range" in st.session_state:
         "It is **not** a guaranteed best *k*—compare with silhouette and domain judgment."
     )
 
-    results_df = pd.DataFrame({
-        "k": k_range_s,
-        "inertia": [round(v, 2) for v in inertias_s],
-        "silhouette_numpy": [round(v, 4) for v in sil_numpy_s],
-        "silhouette_sklearn": [round(v, 4) for v in sil_sklearn_s],
-    })
+    results_df = pd.DataFrame(
+        {
+            "k": k_range_s,
+            "inertia": [round(v, 2) for v in inertias_s],
+            "silhouette_numpy": [round(v, 4) for v in sil_numpy_s],
+            "silhouette_sklearn": [round(v, 4) for v in sil_sklearn_s],
+        }
+    )
 
     # High-contrast row for dark Streamlit themes (pale yellow + default text was hard to read).
     _elbow_row_style = (
@@ -691,7 +745,11 @@ if "ks_k_range" in st.session_state:
         return [""] * len(row)
 
     styled = results_df.style.apply(highlight_elbow, axis=1).format(
-        {"inertia": "{:,.2f}", "silhouette_numpy": "{:.4f}", "silhouette_sklearn": "{:.4f}"}
+        {
+            "inertia": "{:,.2f}",
+            "silhouette_numpy": "{:.4f}",
+            "silhouette_sklearn": "{:.4f}",
+        }
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
@@ -702,9 +760,11 @@ if "ks_k_range" in st.session_state:
             "Features were **z-score normalised** before clustering "
             f"(mean=0, std≈1 per column). {n_s} neighborhoods × {len(features_s)} features."
         )
-        feat_stats = pd.DataFrame({
-            "feature": features_s,
-            "mean (raw)": X_raw_s.mean(axis=0).round(3),
-            "std (raw)": X_raw_s.std(axis=0).round(3),
-        })
+        feat_stats = pd.DataFrame(
+            {
+                "feature": features_s,
+                "mean (raw)": X_raw_s.mean(axis=0).round(3),
+                "std (raw)": X_raw_s.std(axis=0).round(3),
+            }
+        )
         st.dataframe(feat_stats, use_container_width=True, hide_index=True)

@@ -21,11 +21,11 @@ BX08 Riverdale-Kingsbridge-Marble Hill (CD 8 Approximation),BX08,BRONX,2559.4020
 BX11 Pelham Parkway-Morris Park (CD 11 Approximation),BX11,BRONX,2852.29,5900.0,1
 MN01 Financial District-Tribeca (CD 1 Equivalent),MN01,MANHATTAN,4996.2883804536295,19725.0,7
 MN02 Greenwich Village-SoHo (CD 2 Equivalent),MN02,MANHATTAN,4971.496251490287,19584.0,3
-MN03 Lower East Side-Chinatown (CD 3 Equivalent),MN03,MANHATTAN,2814.1379381443303,7481.0,2
+MN03 Lower East Side-Chinatown (CD 3 Equivalent),MN03,MANHATTAN,2814.13793814433,7481.0,2
 MN04 Chelsea-Hell's Kitchen (CD 4 Approximation),MN04,MANHATTAN,3648.757731958763,16529.0,2
 MN05 Midtown-Flatiron-Union Square (CD 5 Approximation),MN05,MANHATTAN,9396.0428116136,50827.0,12
 MN06 East Midtown-Murray Hill (CD 6 Approximation),MN06,MANHATTAN,6113.796886597938,28056.0,5
-MN07 Upper West Side (CD 7 Approximation),MN07,MANHATTAN,3781.1879381443305,11244.0,2
+MN07 Upper West Side (CD 7 Approximation),MN07,MANHATTAN,3781.18793814433,11244.0,2
 MN08 Upper East Side-Roosevelt Island (CD 8 Equivalent),MN08,MANHATTAN,2099.8936170212764,7220.0,1
 MN10 Harlem (CD 10 Equivalent),MN10,MANHATTAN,4945.84,9667.0,1
 MN12 Washington Heights-Inwood (CD 12 Equivalent),MN12,MANHATTAN,4115.82,8747.0,1
@@ -37,7 +37,7 @@ QN05 Ridgewood-Maspeth-Middle Village (CD 5 Approximation),QN05,QUEENS,1729.7649
 QN06 Forest Hills-Rego Park (CD 6 Approximation),QN06,QUEENS,1664.9529896907216,5835.0,2
 QN07 Flushing-Murray Hill-Whitestone (CD 7 Approximation),QN07,QUEENS,3860.8096960910652,15500.0,4
 QN08 Fresh Meadows-Hillcrest-Briarwood (CD 8 Approximation),QN08,QUEENS,1932.54,4635.0,1
-QN09 Kew Gardens-Richmond Hill-Woodhaven (CD 9 Approximation),QN09,QUEENS,1753.4639175257735,9070.0,2
+QN09 Kew Gardens-Richmond Hill-Woodhaven (CD 9 Approximation),QN09,QUEENS,1753.463917525773,9070.0,2
 QN11 Auburndale-Bayside-Douglaston (CD 11 Approximation),QN11,QUEENS,1164.0618556701031,2607.0,1
 QN12 Jamaica-St. Albans-Hollis (CD 12 Approximation),QN12,QUEENS,2223.8861649484534,13426.0,5
 QN14 The Rockaways (CD 14 Approximation),QN14,QUEENS,1453.4639175257732,3664.0,1

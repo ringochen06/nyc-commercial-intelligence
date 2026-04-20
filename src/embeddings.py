@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +42,7 @@ LOCAL_EMBEDDING_MODEL_DIR = Path(
 EMBEDDINGS_DIR = REPO_ROOT / "outputs" / "embeddings"
 
 _ACTIVE_EMBEDDING_BACKEND: str | None = None
+_OPENAI_RUNTIME_AVAILABLE: bool | None = None
 
 
 def _set_active_backend(backend: str) -> None:
@@ -65,9 +68,56 @@ def _local_model_exists() -> bool:
     return LOCAL_EMBEDDING_MODEL_DIR.exists()
 
 
+def _openai_key_value() -> str:
+    return str(os.getenv("OPENAI_API_KEY", "")).strip()
+
+
+def _looks_like_placeholder_key(key: str) -> bool:
+    """Heuristic guard for template keys such as `sk-...` in `.env.example`."""
+    lowered = key.lower()
+    if not key:
+        return True
+    if "..." in key:
+        return True
+    placeholders = {
+        "sk-",
+        "sk-...",
+        "your_openai_api_key",
+        "<openai_api_key>",
+    }
+    return lowered in placeholders
+
+
 def _openai_available() -> bool:
-    """Return whether an OpenAI API key is present in the current environment."""
-    return bool(os.getenv("OPENAI_API_KEY"))
+    """Return whether OpenAI should be considered usable for auto backend routing."""
+    key = _openai_key_value()
+    if _looks_like_placeholder_key(key):
+        return False
+    if _OPENAI_RUNTIME_AVAILABLE is False:
+        return False
+    return True
+
+
+def _probe_openai_runtime() -> bool:
+    """One-time runtime probe used by auto mode before committing to OpenAI cache/use."""
+    global _OPENAI_RUNTIME_AVAILABLE
+    if _OPENAI_RUNTIME_AVAILABLE is not None:
+        return _OPENAI_RUNTIME_AVAILABLE
+    if not _openai_available():
+        _OPENAI_RUNTIME_AVAILABLE = False
+        return False
+    try:
+        _embed_texts_openai(["runtime probe"], model=EMBEDDING_MODEL)
+        _OPENAI_RUNTIME_AVAILABLE = True
+        return True
+    except Exception:
+        _OPENAI_RUNTIME_AVAILABLE = False
+        return False
+
+
+def _mark_openai_runtime_unavailable() -> None:
+    global _OPENAI_RUNTIME_AVAILABLE
+    _OPENAI_RUNTIME_AVAILABLE = False
 
 
 def _import_sentence_transformer():
@@ -130,7 +180,7 @@ def _choose_backend() -> str:
     if _ACTIVE_EMBEDDING_BACKEND in {"openai", "local"}:
         return _ACTIVE_EMBEDDING_BACKEND
 
-    if _openai_available():
+    if _probe_openai_runtime():
         return "openai"
     if _local_model_exists():
         return "local"
@@ -283,11 +333,12 @@ def _embed_texts_local(texts: list[str]) -> np.ndarray:
             normalize_embeddings=False,
         )
         return np.asarray(vecs, dtype=np.float32)
+    except OSError as exc:
+        # Windows DLL load errors (for example `shm.dll`) can be process-local.
+        # A clean child process often resolves it.
+        return _embed_texts_local_subprocess(texts, cause=exc)
     except Exception:
-        # Some sentence-transformers / torch / transformers combinations can
-        # fail at runtime with device-placement errors (for example `meta`
-        # tensors). Fall back to the lower-level Transformers path instead of
-        # treating local embeddings as unavailable.
+        # Fall back to the lower-level Transformers path.
         torch, AutoModel, AutoTokenizer = _import_transformers_backend()
         tokenizer = AutoTokenizer.from_pretrained(str(LOCAL_EMBEDDING_MODEL_DIR))
         model = AutoModel.from_pretrained(str(LOCAL_EMBEDDING_MODEL_DIR))
@@ -307,6 +358,39 @@ def _embed_texts_local(texts: list[str]) -> np.ndarray:
             counts = torch.clamp(attention_mask.sum(dim=1), min=1e-9)
             vecs = summed / counts
         return vecs.cpu().numpy().astype(np.float32, copy=False)
+
+
+def _embed_texts_local_subprocess(texts: list[str], *, cause: Exception) -> np.ndarray:
+    """Run local embeddings in a clean child process when the current process cannot load torch."""
+    payload = json.dumps(
+        {
+            "model_dir": str(LOCAL_EMBEDDING_MODEL_DIR),
+            "texts": texts,
+        }
+    )
+    worker = (
+        "import json, sys, numpy as np\n"
+        "from sentence_transformers import SentenceTransformer\n"
+        "payload = json.load(sys.stdin)\n"
+        "model = SentenceTransformer(payload['model_dir'])\n"
+        "vecs = model.encode(payload['texts'], convert_to_numpy=True, normalize_embeddings=False)\n"
+        "json.dump(np.asarray(vecs, dtype=np.float32).tolist(), sys.stdout)\n"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", worker],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as sub_exc:
+        stderr = (sub_exc.stderr or "").strip()
+        raise RuntimeError(
+            "Local embedding runtime failed in-process and in subprocess fallback. "
+            f"Subprocess stderr: {stderr or '<empty>'}"
+        ) from (sub_exc if stderr else cause)
+    return np.asarray(json.loads(completed.stdout), dtype=np.float32)
 
 
 # ── Embedding backend selection ─────────────────────────────────────────────
@@ -333,8 +417,11 @@ def embed_texts(
     try:
         vecs = _embed_texts_openai(texts, model=model)
         _set_active_backend("openai")
+        global _OPENAI_RUNTIME_AVAILABLE
+        _OPENAI_RUNTIME_AVAILABLE = True
         return vecs
     except Exception:
+        _mark_openai_runtime_unavailable()
         if requested_backend == "openai":
             raise
         vecs = _embed_texts_local(texts)
@@ -423,6 +510,11 @@ def embed_neighborhood_features(
     """
     requested_backend = _get_backend_request()
     preferred_backend = requested_backend or _choose_backend()
+
+    # In auto mode, if OpenAI is configured but not actually usable, switch to local
+    # before loading/returning a backend-specific cache.
+    if requested_backend is None and preferred_backend == "openai" and not _probe_openai_runtime():
+        preferred_backend = "local"
 
     if not force:
         cached = load_embeddings(backend=preferred_backend)

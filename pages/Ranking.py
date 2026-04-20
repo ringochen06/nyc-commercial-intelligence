@@ -509,8 +509,11 @@ try:
 
 except Exception as e:
     st.warning(
-        f"Semantic search unavailable (embeddings not cached or OPENAI_API_KEY not set): {e}\n\n"
-        "Run `python -m src.embeddings` to generate embeddings first, or set OPENAI_API_KEY in .env."
+        f"Semantic search unavailable: {e}\n\n"
+        "The app supports both OpenAI and local embeddings. "
+        "Run `python -m src.embeddings` to generate the cache first. "
+        "If you want OpenAI embeddings, set `OPENAI_API_KEY` in `.env`; "
+        "otherwise make sure the local model exists at `../all-MiniLM-L6-v2`."
     )
 
 # ── Claude agent analysis ──────────────────────────────────────────────────

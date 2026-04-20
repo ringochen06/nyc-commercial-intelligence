@@ -19,7 +19,7 @@ from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from embeddings import cosine_similarity, load_embeddings  # noqa: E402
+from embeddings import cosine_similarity, get_runtime_backend, load_embeddings  # noqa: E402
 from feature_engineering import load_boundaries  # noqa: E402
 from kmeans_numpy import compute_inertia, kmeans, kmeans_with_caching, silhouette_score  # noqa: E402
 
@@ -242,8 +242,8 @@ def _cluster_semantics_from_embeddings(
     top_n: int = 3,
     text_max_len: int = 420,
 ) -> list[dict[str, object]] | None:
-    """Per-cluster representatives using cached OpenAI embeddings (full-table row order)."""
-    loaded = load_embeddings()
+    """Per-cluster representatives using the cache for the runtime embedding backend."""
+    loaded = load_embeddings(backend=get_runtime_backend())
     if loaded is None:
         return None
     emb_all, texts_all = loaded

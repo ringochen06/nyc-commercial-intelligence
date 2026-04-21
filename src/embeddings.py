@@ -1,17 +1,23 @@
 """
-Generate and store neighborhood text-profile embeddings using OpenAI's API.
+Generate and store neighborhood text-profile embeddings.
 
-Each neighborhood gets a short textual profile built from its features,
-then embedded with text-embedding-3-small.  Embeddings are saved as .npy
-for fast reload.
+Backends (see EMBEDDING_BACKEND):
+  - openai: text-embedding-3-small (or OPENAI_EMBEDDING_MODEL) via API
+  - sentence_transformers: local model (default all-MiniLM-L6-v2), no API
+  - auto: OpenAI if OPENAI_API_KEY is set, else sentence-transformers
+
+Caches under outputs/embeddings/:
+  - OpenAI vectors: neighborhood_embeddings.npy (+ neighborhood_texts.npy)
+  - Sentence-transformers: neighborhood_embeddings_st.npy (same texts file)
 
 Usage (standalone):
-    python -m src.embeddings          # embeds all neighborhoods, saves to outputs/embeddings/
+    python -m src.embeddings          # embeds all neighborhoods, saves cache
     python -m src.embeddings --force   # re-embed even if cache exists
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -27,10 +33,72 @@ except ImportError:
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+SENTENCE_TRANSFORMER_MODEL = os.getenv(
+    "SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
+).strip()
+
 EMBEDDINGS_DIR = Path(__file__).resolve().parent.parent / "outputs" / "embeddings"
 EMBEDDINGS_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings.npy"
+EMBEDDINGS_ST_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings_st.npy"
 TEXTS_PATH = EMBEDDINGS_DIR / "neighborhood_texts.npy"
+
+_st_model = None
+
+
+def _backend_env_raw() -> str:
+    return os.getenv("EMBEDDING_BACKEND", "openai").strip().lower()
+
+
+def resolve_embedding_backend() -> str:
+    """
+    Effective backend for cache paths and embed_texts / embed_neighborhood_features.
+
+    Values: "openai" | "sentence_transformers".
+    """
+    raw = _backend_env_raw()
+    if raw in ("sentence_transformers", "st", "sbert"):
+        return "sentence_transformers"
+    if raw == "auto":
+        if os.getenv("OPENAI_API_KEY", "").strip():
+            return "openai"
+        return "sentence_transformers"
+    return "openai"
+
+
+def _cache_paths(backend: str) -> tuple[Path, Path]:
+    if backend == "sentence_transformers":
+        return EMBEDDINGS_ST_PATH, TEXTS_PATH
+    return EMBEDDINGS_PATH, TEXTS_PATH
+
+
+def _get_sentence_transformer(model_name: str | None = None):
+    global _st_model
+    name = (model_name or SENTENCE_TRANSFORMER_MODEL).strip()
+    if _st_model is not None and getattr(_st_model, "_ci_name", None) == name:
+        return _st_model
+    from sentence_transformers import SentenceTransformer
+
+    _st_model = SentenceTransformer(name)
+    setattr(_st_model, "_ci_name", name)
+    return _st_model
+
+
+def _embed_texts_sentence_transformers(
+    texts: list[str], *, model_name: str | None = None
+) -> np.ndarray:
+    model = _get_sentence_transformer(model_name)
+    vecs = model.encode(
+        texts,
+        batch_size=64,
+        show_progress_bar=len(texts) > 128,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )
+    return np.asarray(vecs, dtype=np.float32)
+
 
 # ── Text profile builder ────────────────────────────────────────────────────
 
@@ -66,7 +134,6 @@ def build_text_profile(row: pd.Series) -> str:
     nfh_overall = row.get("nfh_overall_score")
     nfh_shocks = row.get("nfh_goal4_fin_shocks_score")
 
-    # Qualitative descriptors
     foot_traffic = (
         "very high"
         if ped > 5000
@@ -88,9 +155,7 @@ def build_text_profile(row: pd.Series) -> str:
     if pd.notna(nfh_shocks):
         nfh_txt += f" Financial-shock resilience score is {float(nfh_shocks):.2f}."
 
-    # Retail share: ratio_retail is typically 0–1 (share of POIs)
     rr_pct = ratio_retail_v * 100.0 if ratio_retail_v <= 1.0 else ratio_retail_v
-
     mix_txt = f"{cat_div} simplified category groups; retail license share of POIs about {rr_pct:.0f}%. "
 
     soc_parts: list[str] = []
@@ -142,32 +207,47 @@ def build_all_profiles(df: pd.DataFrame) -> list[str]:
 # ── OpenAI embedding ────────────────────────────────────────────────────────
 
 
-def embed_texts(texts: list[str], model: str = EMBEDDING_MODEL) -> np.ndarray:
-    """
-    Call OpenAI embeddings API and return (n, dim) float32 array.
-
-    Batches automatically (API accepts up to 2048 inputs per call).
-    """
+def _embed_texts_openai(texts: list[str], model: str) -> np.ndarray:
     client = OpenAI()
     response = client.embeddings.create(input=texts, model=model)
     vecs = [item.embedding for item in response.data]
     return np.array(vecs, dtype=np.float32)
 
 
+def embed_texts(texts: list[str], model: str | None = None) -> np.ndarray:
+    """
+    Embed *texts* with the active backend (see resolve_embedding_backend).
+
+    For OpenAI, *model* defaults to OPENAI_EMBEDDING_MODEL.
+    For sentence-transformers, *model* defaults to SENTENCE_TRANSFORMER_MODEL.
+    """
+    backend = resolve_embedding_backend()
+    if backend == "sentence_transformers":
+        return _embed_texts_sentence_transformers(texts, model_name=model)
+    openai_model = model or EMBEDDING_MODEL
+    return _embed_texts_openai(texts, openai_model)
+
+
 # ── Persist / load ──────────────────────────────────────────────────────────
 
 
-def save_embeddings(embeddings: np.ndarray, texts: list[str]) -> None:
+def save_embeddings(
+    embeddings: np.ndarray, texts: list[str], *, backend: str | None = None
+) -> None:
+    b = backend or resolve_embedding_backend()
+    emb_path, texts_path = _cache_paths(b)
     EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(EMBEDDINGS_PATH, embeddings)
-    np.save(TEXTS_PATH, np.array(texts, dtype=object))
+    np.save(emb_path, embeddings)
+    np.save(texts_path, np.array(texts, dtype=object))
 
 
-def load_embeddings() -> tuple[np.ndarray, list[str]] | None:
-    """Return (embeddings, texts) if cache exists, else None."""
-    if EMBEDDINGS_PATH.exists() and TEXTS_PATH.exists():
-        emb = np.load(EMBEDDINGS_PATH)
-        texts = np.load(TEXTS_PATH, allow_pickle=True).tolist()
+def load_embeddings(*, backend: str | None = None) -> tuple[np.ndarray, list[str]] | None:
+    """Return (embeddings, texts) if cache exists for *backend*, else None."""
+    b = backend or resolve_embedding_backend()
+    emb_path, texts_path = _cache_paths(b)
+    if emb_path.exists() and texts_path.exists():
+        emb = np.load(emb_path)
+        texts = np.load(texts_path, allow_pickle=True).tolist()
         return emb, texts
     return None
 
@@ -200,8 +280,28 @@ def embed_neighborhood_features(
         csv_path = NEIGHBORHOOD_FEATURES_CSV
     df = pd.read_csv(csv_path)
     texts = build_all_profiles(df)
-    embeddings = embed_texts(texts)
-    save_embeddings(embeddings, texts)
+    backend = resolve_embedding_backend()
+
+    if backend == "openai":
+        try:
+            embeddings = embed_texts(texts)
+        except Exception as e:
+            if _backend_env_raw() == "auto":
+                logger.warning(
+                    "OpenAI embedding failed (%s); falling back to sentence-transformers.",
+                    e,
+                )
+                embeddings = _embed_texts_sentence_transformers(texts)
+                save_embeddings(
+                    embeddings, texts, backend="sentence_transformers"
+                )
+                return embeddings, texts
+            raise
+        save_embeddings(embeddings, texts, backend="openai")
+    else:
+        embeddings = _embed_texts_sentence_transformers(texts)
+        save_embeddings(embeddings, texts, backend="sentence_transformers")
+
     return embeddings, texts
 
 
@@ -210,6 +310,9 @@ if __name__ == "__main__":
 
     force = "--force" in sys.argv
     emb, texts = embed_neighborhood_features(force=force)
+    b = resolve_embedding_backend()
+    path, _ = _cache_paths(b)
+    print(f"Backend: {b}")
     print(f"Embedded {len(texts)} neighborhoods -> shape {emb.shape}")
-    print(f"Saved to {EMBEDDINGS_PATH}")
+    print(f"Saved to {path}")
     print(f"\nSample profile:\n{texts[0]}")

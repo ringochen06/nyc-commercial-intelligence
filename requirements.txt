@@ -16,6 +16,9 @@ anthropic>=0.39
 openai>=1.40
 python-dotenv>=1.0
 
+# Local embeddings (optional; used when EMBEDDING_BACKEND=sentence_transformers or auto without OpenAI key)
+sentence-transformers>=3.0
+
 
 # Dev / tests
 pytest>=7.0

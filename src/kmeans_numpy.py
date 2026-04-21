@@ -82,7 +82,6 @@ def kmeans(
     n = X.shape[0]
     rng = np.random.default_rng(random_state)
     centroids = X[rng.choice(n, size=k, replace=False)]
-
     for i in range(max_iter):
         z = assign_labels(X, centroids)
         new_centroids = update_centroids(X, z, k)
@@ -91,7 +90,67 @@ def kmeans(
             break
         centroids = new_centroids
 
-    return z, centroids, i + 1
+    return z, centroids, i + 1 
+    
+
+def kmeans_plus_plus(
+    X: np.ndarray,
+    k: int,
+    *,
+    max_iter: int = 100,
+    tol: float = 1e-4,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """K-means++ initialization for better convergence. Not used by ``app.py``; standard kmeans is used instead."""
+    
+    rng = np.random.default_rng(random_state)
+    initial_centroid = X[rng.choice(X.shape[0])]
+    centroids = [initial_centroid]
+    
+    #print(f"X.shape[0]={X.shape[0]}, initial_centroid shape={initial_centroid.shape}")
+    for c in range(1, k):
+        dist = pairwise_squared_euclidean(X, np.array(centroids))  # (n, c)
+        min_dist_to_centroid = np.min(dist, axis=1)  # (n,)
+        probs = min_dist_to_centroid/ np.sum(min_dist_to_centroid)
+        next_centroid = X[rng.choice(X.shape[0], p=probs)]
+        centroids.append(next_centroid)
+    centroids = np.array(centroids)  # (k, d)
+    
+    for i in range(max_iter):
+        z = assign_labels(X, centroids)
+        new_centroids = update_centroids(X, z, k)
+        if np.linalg.norm(new_centroids - centroids) < tol:
+            centroids = new_centroids
+            break
+        centroids = new_centroids
+
+    return z, centroids, i + 1 
+    
+
+def kmeans_plus_plus_with_caching(
+    features: list[str],
+    X: np.ndarray,
+    k: int,
+    *,
+    max_iter: int = 100,
+    tol: float = 1e-4,
+    random_state: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """K-means++ initialization with caching to avoid recomputation during development."""
+    CLUSTER_PATH.mkdir(parents=True, exist_ok=True)
+    cache_file = CLUSTER_PATH / f"kmeans_k{k}.h5"
+    
+    # Try to load from cache
+    try:
+        labels, centroids, iterations = load_kmeans_results(k, features, cache_file)
+        return labels, centroids, 0  # 0 iterations indicates loaded from cache
+    except (FileNotFoundError, KeyError):
+        pass  # Cache miss, proceed with computation
+    
+    # Compute new results
+    labels, centroids, n_iter = kmeans_plus_plus(X, k, max_iter=max_iter, tol=tol, random_state=random_state)
+    save_kmeans_results(k, features, labels, centroids, n_iter, cache_file)
+    return labels, centroids, n_iter
 
 def kmeans_with_caching(
     features: list[str],
@@ -136,14 +195,14 @@ def kmeans_with_caching(
     
     # Try to load from cache
     try:
-        labels, centroids = load_kmeans_results(k, features, cache_file)
+        labels, centroids, iterations = load_kmeans_results(k, features, cache_file)
         return labels, centroids, 0  # 0 iterations indicates loaded from cache
     except (FileNotFoundError, KeyError):
         pass  # Cache miss, proceed with computation
     
     # Compute new results
     labels, centroids, n_iter = kmeans(X, k, max_iter=max_iter, tol=tol, random_state=random_state)
-    save_kmeans_results(k, features, labels, centroids, cache_file)
+    save_kmeans_results(k, features, labels, centroids, n_iter, cache_file)
     return labels, centroids, n_iter
 
 def assign_labels(X: np.ndarray, centroids: np.ndarray) -> np.ndarray:
@@ -261,7 +320,7 @@ def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
 
 
 
-def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, path: Path | str) -> None:
+def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, n_iterations: int, path: Path | str) -> None:
     """Persist clustering results to HDF5 file with features-based key.
     
     Each feature selection is stored as a separate dataset group in the same k file,
@@ -274,6 +333,7 @@ def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroi
         f"features_{feat_key}": np.array(features, dtype=object),
         f"labels_{feat_key}": labels,
         f"centroids_{feat_key}": centroids,
+        f"n_iterations_{feat_key}": np.array([n_iterations]),
     }
     _save_hdf5_dict(data, path)
 
@@ -293,6 +353,7 @@ def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[
     
     labels_key = f"labels_{feat_key}"
     centroids_key = f"centroids_{feat_key}"
+    iterations_key = f"n_iterations_{feat_key}"
     
     if labels_key not in data or centroids_key not in data:
         raise KeyError(
@@ -300,4 +361,7 @@ def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[
             f"Available keys in {path}: {list(data.keys())}"
         )
     
-    return data[labels_key], data[centroids_key]
+    return data[labels_key], data[centroids_key], data[iterations_key][0]
+
+
+#kmeans_plus_plus()

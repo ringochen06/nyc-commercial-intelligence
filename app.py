@@ -24,6 +24,8 @@ from kmeans_numpy import (
     compute_inertia,
     kmeans,
     kmeans_with_caching,
+    kmeans_plus_plus,
+    kmeans_plus_plus_with_caching,
     silhouette_score,
 )  # noqa: E402
 from config import (  # noqa: E402
@@ -341,7 +343,7 @@ if st.button("Run K-Selection Analysis", type="primary"):
     total_steps = len(k_range)
 
     for step, k in enumerate(k_range):
-        labels, centroids, _ = kmeans(X, k, random_state=42)
+        labels, centroids, _ = kmeans_plus_plus(X, k, random_state=42)
         inertias.append(compute_inertia(X, labels, centroids))
         sil_numpy.append(silhouette_score(X, labels))
         sil_sklearn.append(float(sklearn_silhouette_score(X, labels)))
@@ -467,8 +469,8 @@ if "ks_k_range" in st.session_state:
         f"Scatter, map, centroid bars, and notes below show all **{viz_k}** clusters."
     )
 
-    viz_labels, viz_centroids, _ = kmeans_with_caching(
-        selected_features, X_s, viz_k, random_state=42
+    viz_labels, viz_centroids, _ = kmeans_plus_plus_with_caching(
+        features_s, X_s, k=viz_k, random_state=42
     )
 
     # Share with Ranking page: neighborhood → cluster id, and per-cluster brief text

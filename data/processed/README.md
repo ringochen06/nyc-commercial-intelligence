@@ -133,6 +133,46 @@ Details and setup: **root `README.md`**.
 
 ---
 
+### Text profile → embeddings (`src/embeddings.py`)
+
+Each CDTA row is turned into one English paragraph (`build_text_profile`), then embedded (OpenAI **`text-embedding-3-small`** when a key is set, else **sentence-transformers**; override with **`EMBEDDING_BACKEND`**). After changing profile text or feature columns, rerun **`python -m src.embeddings --force`**.
+
+**Soft / embedded columns (inputs to the text profile)**
+
+| Column (or pattern) | Used in text profile |
+|----------------------|----------------------|
+| `neighborhood` | Area name |
+| `borough` | Borough |
+| `area_km2` | CDTA footprint (km²) |
+| `storefront_filing_count` | Total non-vacant filings |
+| `storefront_density_per_km2` | Filings per km² + qualitative density phrase |
+| `act_<SLUG>_storefront` | One **numeric** column per Primary Business Activity from the storefront export. **Every** column with count **> 0** is written into the embedding profile (humanized activity label, sorted by count). Exact slugs match your CSV header (new Open Data categories can add columns). |
+| `category_diversity` | Number of non-zero activity buckets |
+| `category_entropy` | Mix / diversity across `act_*_storefront` |
+| `avg_pedestrian` | Foot-traffic level + numeric average |
+| `subway_station_count` | Transit access |
+| `commercial_activity_score` | `log1p` storefront × pedestrian product |
+| `transit_activity_score` | `log1p` subway × pedestrian product |
+| `pop_black` | MOCEJ-style **Black** resident count (separate sentence in the profile) |
+| `pop_hispanic` | MOCEJ-style **Hispanic** resident count (separate sentence) |
+| `pop_asian` | MOCEJ-style **Asian** resident count (separate sentence; use with `act_FOOD_SERVICES_storefront` etc. for cuisine / “Asian restaurant”–style queries) |
+| `total_population_proxy` | Sum of `pop_black` + `pop_hispanic` + `pop_asian` (separate sentence; not a census official total) |
+| `nfh_median_income` | NFH median income (when present) |
+| `pct_bachelors_plus` | Share with bachelor’s or higher |
+| `commute_public_transit` | Public-transit commute share |
+| `nfh_overall_score`, `nfh_goal4_fin_shocks_score` | NFH composite lines (when present) |
+| **Blended** (Ranking UI only) | **Not** embedded: MinMax on **`[cosine_sim, commercial_activity_score]`** on the filtered rows, then **α·semantic + (1−α)·activity** |
+
+**Example `act_*_storefront` column names** (one row per activity bucket in a typical Open Data export; yours may differ):
+
+`act_ACCOUNTING_SERVICES_storefront`, `act_BROADCASTING_TELECOMM_storefront`, `act_EDUCATIONAL_SERVICES_storefront`, `act_FINANCE_AND_INSURANCE_storefront`, `act_FOOD_SERVICES_storefront`, `act_HEALTH_CARE_OR_SOCIAL_ASSISTANCE_storefront`, `act_INFORMATION_SERVICES_storefront`, `act_LEGAL_SERVICES_storefront`, `act_MANUFACTURING_storefront`, `act_MOVIES_VIDEO_SOUND_storefront`, `act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront`, `act_OTHER_storefront`, `act_PUBLISHING_storefront`, `act_REAL_ESTATE_storefront`, `act_RETAIL_storefront`, `act_UNKNOWN_storefront`, `act_WHOLESALE_storefront`, `act_other_storefront`
+
+The **Ranking** page table and “Soft / embedded columns” reference list these dynamically from `neighborhood_features_final.csv`.
+
+**NFH `nfh_pct_*` columns:** If your build merged Neighborhood Financial Health, those percentage columns may still appear in the CSV for DuckDB / Claude. They are **not** fed into the embedding text profile (avoid duplicating or conflicting with MOCEJ **`pop_*`** counts used for semantic search).
+
+---
+
 ### Data Integration Process
 
 1. Raw datasets are cleaned (`src/data_processing.py`) → `*_clean.csv` under `data/processed/`.  

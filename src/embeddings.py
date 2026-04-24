@@ -107,13 +107,16 @@ def build_text_profile(row: pd.Series) -> str:
     """
     Compose a short natural-language profile for one neighborhood row.
 
-    Columns used (from neighborhood_features_final.csv):
-      neighborhood, borough, area_km2, storefront_filing_count, storefront_density_per_km2,
-      act_*_storefront (top activities), category_diversity, category_entropy,
+    Columns used (from neighborhood_features_final.csv), when present:
+      neighborhood, borough, area_km2,
+      storefront_filing_count, storefront_density_per_km2,
+      all ``act_*_storefront`` with count > 0 (sorted by count, written into prose),
+      category_diversity, category_entropy,
       avg_pedestrian, subway_station_count,
+      pop_black, pop_hispanic, pop_asian, total_population_proxy (MOCEJ-style counts; each spelled out separately for semantic search),
       nfh_median_income, pct_bachelors_plus, commute_public_transit,
-      commercial_activity_score (log1p of filings×ped), transit_activity_score (log1p of subway×ped),
-      optional nfh_* scores (no NFH ranks)
+      commercial_activity_score, transit_activity_score,
+      nfh_overall_score, nfh_goal4_fin_shocks_score
     """
     name = row.get("neighborhood", "Unknown")
     borough = row.get("borough", "")
@@ -131,6 +134,10 @@ def build_text_profile(row: pd.Series) -> str:
     transit = round(float(row.get("transit_activity_score", 0)), 0)
     nfh_overall = row.get("nfh_overall_score")
     nfh_shocks = row.get("nfh_goal4_fin_shocks_score")
+    pop_b = row.get("pop_black")
+    pop_h = row.get("pop_hispanic")
+    pop_a = row.get("pop_asian")
+    pop_tot = row.get("total_population_proxy")
 
     foot_traffic = (
         "very high"
@@ -174,6 +181,22 @@ def build_text_profile(row: pd.Series) -> str:
         else ""
     )
 
+    # Separate sentences so queries like "Asian restaurant" align Asian population with FOOD SERVICES counts.
+    pop_demog_txt = ""
+    if pd.notna(pop_tot) and float(pop_tot or 0) > 0:
+        try:
+            b = int(float(pop_b or 0))
+            h = int(float(pop_h or 0))
+            a = int(float(pop_a or 0))
+            t = int(float(pop_tot))
+            pop_demog_txt = (
+                " Community demographics (MOCEJ-style resident counts by group, not percentages):"
+                f" Black population about {b:,}; Hispanic population about {h:,}; Asian population about {a:,};"
+                f" total population proxy (sum of those three groups) about {t:,}."
+            )
+        except (TypeError, ValueError):
+            pop_demog_txt = ""
+
     comm_txt = ""
     if pd.notna(commute_pt):
         try:
@@ -198,11 +221,12 @@ def build_text_profile(row: pd.Series) -> str:
                 )
                 pairs.append((slug, float(row[c])))
             pairs.sort(key=lambda x: -x[1])
-            top = pairs[:4]
-            top_txt = ", ".join(f"{n} ({int(v)})" for n, v in top) if top else ""
+            # List every non-zero activity so free-text queries (e.g. a specific NAICS bucket)
+            # can match CDTAs where that category is present even if it is not in the top few.
+            top_txt = ", ".join(f"{n} ({int(v)})" for n, v in pairs) if pairs else ""
             sf_txt = (
                 f" Non-vacant storefront filings by primary business activity: {int(float(sf_count))} total."
-                + (f" Top activities: {top_txt}." if top_txt else "")
+                + (f" Counts by activity: {top_txt}." if top_txt else "")
             )
         except (TypeError, ValueError):
             sf_txt = ""
@@ -217,6 +241,7 @@ def build_text_profile(row: pd.Series) -> str:
         f"{subway} subway stations nearby. "
         f"Commercial activity score {commercial}, transit activity score {transit}."
         f"{soc_txt}{comm_txt}"
+        f"{pop_demog_txt}"
         f"{sf_txt}"
         f"{nfh_txt}"
     )

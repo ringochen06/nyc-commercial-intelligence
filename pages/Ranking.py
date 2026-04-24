@@ -40,6 +40,7 @@ from config import (  # noqa: E402
     load_cdta_gdf_for_map,
     load_neighborhood_features,
 )
+from feature_engineering import is_act_storefront_column  # noqa: E402
 
 DEFAULT_SOFT_QUERY = (
     "quiet residential area suitable for boutique retail with good subway access"
@@ -236,23 +237,37 @@ if df_filtered.empty:
     )
     st.stop()
 
+_act_cols = sorted(c for c in df_filtered.columns if is_act_storefront_column(c))
 display_cols = [
     "neighborhood",
     "borough",
     "storefront_filing_count",
-    "subway_station_count",
-    "avg_pedestrian",
-    "storefront_density_per_km2",
-    "commercial_activity_score",
-    "transit_activity_score",
 ]
+for _x in ("category_diversity", "category_entropy"):
+    if _x in df_filtered.columns:
+        display_cols.append(_x)
+display_cols.extend(_act_cols)
+display_cols.extend(
+    [
+        "subway_station_count",
+        "avg_pedestrian",
+        "storefront_density_per_km2",
+        "commercial_activity_score",
+        "transit_activity_score",
+    ]
+)
 for optional_col in ["nfh_overall_score", "nfh_goal4_fin_shocks_score"]:
     if optional_col in df_filtered.columns:
         display_cols.append(optional_col)
+display_cols = [c for c in display_cols if c in df_filtered.columns]
+st.caption(
+    f"Showing **{len(_act_cols)}** storefront activity columns (`act_*_storefront`) from your feature table; "
+    "semantic profiles include every activity with count > 0 (`src/embeddings.py`)."
+)
 st.dataframe(
     df_filtered[display_cols].reset_index(drop=True),
     use_container_width=True,
-    height=300,
+    height=360,
 )
 
 with st.expander("About zeros, nulls, and refreshing data", expanded=False):
@@ -546,7 +561,8 @@ with col1:
         "| `storefront_filing_count` | int | Non-vacant storefront filings (CDTA) |\n"
         "| `commercial_activity_score` | float | `log1p`(storefront filings \u00d7 avg pedestrian) |\n"
         "| `nfh_goal4_fin_shocks_score` | float | NFH Goal 4 (financial shocks) index (when column exists) |\n"
-        "| `nfh_overall_score` | float | NFH overall index (when column exists) |"
+        "| `nfh_overall_score` | float | NFH overall index (when column exists) |\n"
+        "| `act_*_storefront` | int | **Not** in the default `WHERE`; available in `SELECT *` and the table above. Add thresholds in SQL if you need category-specific hard filters. |"
     )
 
 with col2:
@@ -554,26 +570,36 @@ with col2:
         "**Soft / embedded columns** (vectors from `src/embeddings.py`: OpenAI `text-embedding-3-small` when a key is set, "
         "else local sentence-transformers; override with `EMBEDDING_BACKEND`)"
     )
+    _act_ref = sorted(c for c in df_full.columns if is_act_storefront_column(c))
+    _act_rows = "".join(
+        f"| `{c}` | Filing count for **{c.removeprefix('act_').removesuffix('_storefront').replace('_', ' ')}** (in profile text when count is above zero) |\n"
+        for c in _act_ref
+    )
     st.markdown(
         "| Column | Used in text profile |\n"
         "|--------|---------------------|\n"
-        "| `neighborhood` | Name context |\n"
-        "| `borough` | Geographic context |\n"
-        "| `area_km2` | CDTA footprint (spatial scale) |\n"
-        "| `storefront_filing_count` | Storefront filing count |\n"
+        "| `neighborhood` | Area name |\n"
+        "| `borough` | Borough |\n"
+        "| `area_km2` | CDTA footprint (km\u00b2) |\n"
+        "| `storefront_filing_count` | Total non-vacant filings |\n"
+        "| `storefront_density_per_km2` | Filings per km\u00b2 (plus density wording) |\n"
         "| `category_diversity` | Count of distinct Primary Business Activity buckets |\n"
-        "| `category_entropy` | Diversity across `act_*_storefront` counts |\n"
+        "| `category_entropy` | Mix across all `act_*_storefront` counts |\n"
+        f"{_act_rows}"
         "| `avg_pedestrian` | Foot traffic level |\n"
         "| `subway_station_count` | Transit access |\n"
-        "| `storefront_density_per_km2` | Filings per km\u00b2 |\n"
+        "| `pop_black` | MOCEJ-style Black resident count (own sentence in profile) |\n"
+        "| `pop_hispanic` | MOCEJ-style Hispanic resident count (own sentence) |\n"
+        "| `pop_asian` | MOCEJ-style Asian resident count (own sentence; pairs with e.g. Asian restaurant queries) |\n"
+        "| `total_population_proxy` | Sum of the three `pop_*` groups (own sentence) |\n"
         "| `nfh_median_income` | NFH median income (when column exists) |\n"
         "| `pct_bachelors_plus` | Share with bachelor's degree or higher |\n"
         "| `commute_public_transit` | Public transit commute share |\n"
-        "| `commercial_activity_score` | Activity level |\n"
-        "| `transit_activity_score` | Transit activity |\n"
+        "| `commercial_activity_score` | Activity level (log-scaled product) |\n"
+        "| `transit_activity_score` | Transit activity (log-scaled product) |\n"
         "| `nfh_overall_score` | NFH overall financial-health composite |\n"
         "| `nfh_goal4_fin_shocks_score` | NFH Goal 4 financial-shock resilience |\n"
-        "| *Blended* | MinMax([semantic, commercial_activity]) on filtered rows, then α·semantic + (1−α)·activity |"
+        "| *Blended* | MinMax([semantic, commercial_activity]) on filtered rows, then α·semantic + (1−α)·activity (Ranking only; not embedded) |"
     )
 
 st.caption(

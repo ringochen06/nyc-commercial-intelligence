@@ -108,24 +108,22 @@ def build_text_profile(row: pd.Series) -> str:
     Compose a short natural-language profile for one neighborhood row.
 
     Columns used (from neighborhood_features_final.csv):
-      neighborhood, borough, area_km2, total_poi, category_diversity, ratio_retail,
-      category_entropy, avg_pedestrian, subway_station_count, poi_density_per_km2,
-      retail_density_per_km2, food_density_per_km2,
+      neighborhood, borough, area_km2, storefront_filing_count, storefront_density_per_km2,
+      act_*_storefront (top activities), category_diversity, category_entropy,
+      avg_pedestrian, subway_station_count,
       nfh_median_income, pct_bachelors_plus, commute_public_transit,
-      commercial_activity_score, transit_activity_score, optional nfh_* scores (no NFH ranks)
+      commercial_activity_score (log1p of filings×ped), transit_activity_score (log1p of subway×ped),
+      optional nfh_* scores (no NFH ranks)
     """
     name = row.get("neighborhood", "Unknown")
     borough = row.get("borough", "")
     area_km2 = round(float(row.get("area_km2", 0) or 0), 1)
-    total_poi = int(row.get("total_poi", 0))
+    sf_count = int(row.get("storefront_filing_count", 0) or 0)
     cat_div = int(row.get("category_diversity", 0) or 0)
-    ratio_retail_v = float(row.get("ratio_retail", 0) or 0)
     entropy = round(float(row.get("category_entropy", 0)), 2)
     ped = int(row.get("avg_pedestrian", 0))
     subway = int(row.get("subway_station_count", 0))
-    density = round(float(row.get("poi_density_per_km2", 0)), 1)
-    retail_d = round(float(row.get("retail_density_per_km2", 0)), 2)
-    food_d = round(float(row.get("food_density_per_km2", 0)), 2)
+    density = round(float(row.get("storefront_density_per_km2", 0)), 1)
     mhi = row.get("nfh_median_income")
     pct_bach = row.get("pct_bachelors_plus")
     commute_pt = row.get("commute_public_transit")
@@ -155,8 +153,7 @@ def build_text_profile(row: pd.Series) -> str:
     if pd.notna(nfh_shocks):
         nfh_txt += f" Financial-shock resilience score is {float(nfh_shocks):.2f}."
 
-    rr_pct = ratio_retail_v * 100.0 if ratio_retail_v <= 1.0 else ratio_retail_v
-    mix_txt = f"{cat_div} simplified category groups; retail license share of POIs about {rr_pct:.0f}%. "
+    mix_txt = f"{cat_div} distinct primary-business-activity buckets from storefront filings. "
 
     soc_parts: list[str] = []
     if pd.notna(mhi):
@@ -184,17 +181,43 @@ def build_text_profile(row: pd.Series) -> str:
         except (TypeError, ValueError):
             pass
 
+    sf_txt = ""
+    if pd.notna(sf_count) and float(sf_count or 0) > 0:
+        try:
+            act_cols = [
+                c
+                for c in row.index
+                if str(c).startswith("act_")
+                and str(c).endswith("_storefront")
+                and float(row.get(c, 0) or 0) > 0
+            ]
+            pairs: list[tuple[str, float]] = []
+            for c in act_cols:
+                slug = (
+                    str(c).removeprefix("act_").removesuffix("_storefront").replace("_", " ")
+                )
+                pairs.append((slug, float(row[c])))
+            pairs.sort(key=lambda x: -x[1])
+            top = pairs[:4]
+            top_txt = ", ".join(f"{n} ({int(v)})" for n, v in top) if top else ""
+            sf_txt = (
+                f" Non-vacant storefront filings by primary business activity: {int(float(sf_count))} total."
+                + (f" Top activities: {top_txt}." if top_txt else "")
+            )
+        except (TypeError, ValueError):
+            sf_txt = ""
+
     return (
         f"{name} in {borough}. "
         f"CDTA area about {area_km2} km2. "
-        f"{total_poi} points of interest with {biz_density} business density ({density}/km2). "
-        f"Retail-category POI density {retail_d}/km2; food-category POI density {food_d}/km2. "
+        f"{sf_count} non-vacant storefront filings; {biz_density} filing density ({density}/km2). "
         f"{mix_txt}"
-        f"Business category diversity is {diversity} (entropy {entropy}). "
+        f"Activity mix diversity is {diversity} (entropy {entropy}). "
         f"{foot_traffic} foot traffic (avg {ped} pedestrians). "
         f"{subway} subway stations nearby. "
         f"Commercial activity score {commercial}, transit activity score {transit}."
         f"{soc_txt}{comm_txt}"
+        f"{sf_txt}"
         f"{nfh_txt}"
     )
 
@@ -241,7 +264,9 @@ def save_embeddings(
     np.save(texts_path, np.array(texts, dtype=object))
 
 
-def load_embeddings(*, backend: str | None = None) -> tuple[np.ndarray, list[str]] | None:
+def load_embeddings(
+    *, backend: str | None = None
+) -> tuple[np.ndarray, list[str]] | None:
     """Return (embeddings, texts) if cache exists for *backend*, else None."""
     b = backend or resolve_embedding_backend()
     emb_path, texts_path = _cache_paths(b)
@@ -292,9 +317,7 @@ def embed_neighborhood_features(
                     e,
                 )
                 embeddings = _embed_texts_sentence_transformers(texts)
-                save_embeddings(
-                    embeddings, texts, backend="sentence_transformers"
-                )
+                save_embeddings(embeddings, texts, backend="sentence_transformers")
                 return embeddings, texts
             raise
         save_embeddings(embeddings, texts, backend="openai")

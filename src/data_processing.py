@@ -237,140 +237,140 @@ def clean_subway_data(subway_path: str | Path) -> pd.DataFrame:
 
 
 # =========================================================
-# 3. Restaurant POI
+# 2b. Storefronts reported vacant or not (NYC Open Data 92iy-9c3n)
 # =========================================================
 
 
-def clean_restaurant_data(restaurant_path: str | Path) -> pd.DataFrame:
-    df_rest = pd.read_csv(restaurant_path)
+def clean_storefront_data(storefront_path: str | Path) -> pd.DataFrame:
+    """
+    Clean NYC **Storefronts Reported Vacant or Not** export (Open Data).
 
-    name_col = "DBA" if "DBA" in df_rest.columns else "dba"
-    borough_col = "BORO" if "BORO" in df_rest.columns else "boro"
-    lat_col = "Latitude" if "Latitude" in df_rest.columns else "latitude"
-    lon_col = "Longitude" if "Longitude" in df_rest.columns else "longitude"
-    cuisine_col = (
-        "CUISINE DESCRIPTION"
-        if "CUISINE DESCRIPTION" in df_rest.columns
-        else "cuisine description"
-    )
+    Expected columns match the English dataset export, including filing metadata,
+    BBL, vacancy and construction flags, primary business activity, coordinates,
+    community board, and NTA fields. Rows without valid coordinates are dropped.
+    Rows with **Vacant on 12/31** or **Vacant 6/30 or Date Sold** equal to ``YES`` are
+    removed. ``MISCELLANEOUS OTHER SERVICE`` is mapped to the category label ``other``
+    in ``business_activity_category``; other activities keep the source string
+    (empty → ``UNKNOWN``).
+    """
+    df_raw = pd.read_csv(storefront_path, low_memory=False)
 
-    keep_cols = [
-        c
-        for c in [name_col, cuisine_col, borough_col, lat_col, lon_col]
-        if c in df_rest.columns
-    ]
-    df = df_rest[keep_cols].copy()
-
-    df = df.rename(
-        columns={
-            name_col: "business_name",
-            cuisine_col: "category",
-            borough_col: "borough",
-            lat_col: "latitude",
-            lon_col: "longitude",
-        }
-    )
-
-    df["borough"] = standardize_borough(df["borough"])
-    df["category"] = df["category"].astype(str).str.strip().str.lower()
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
-
-    df = df.dropna(subset=["business_name", "borough", "latitude", "longitude"])
-    df = df[(df["latitude"] != 0) & (df["longitude"] != 0)]
-    df = df.drop_duplicates(subset=["business_name", "latitude", "longitude"])
-
-    df["category"] = (
-        df["category"].fillna("unknown").astype(str).str.strip().str.lower()
-    )
-    # DOHMH rows are food-service inspections; drives `simplify_category` default to food vs other.
-    df["poi_type"] = "restaurant"
-    df["description"] = df["category"] + " restaurant in " + df["borough"]
-
-    return df.reset_index(drop=True)
-
-
-# =========================================================
-# 4. Retail POI from business licensing
-# =========================================================
-
-
-def clean_retail_data(license_path: str | Path) -> pd.DataFrame:
-    df_license = pd.read_csv(license_path)
-    df_license["Industry"] = df_license["Industry"].astype(str)
-
-    keep_keywords = [
-        "store",
-        "retail",
-        "dealer",
-        "shop",
-        "electronics",
-        "tobacco",
-        "secondhand",
-        "market",
-        "grocery",
-        "pharmacy",
-        "apparel",
-        "clothing",
-        "jewelry",
-        "furniture",
-        "gift",
-        "beauty",
-        "cosmetics",
-        "hardware",
-        "home",
-    ]
-    df = df_license[
-        (df_license["License Type"] == "Business")
-        & (df_license["License Status"] == "Active")
-        & (
-            df_license["Industry"].str.contains(
-                "|".join(keep_keywords), case=False, na=False
-            )
+    rename_map = {
+        "Filing Due Date": "filing_due_date",
+        "Reporting Year": "reporting_year",
+        "Borough Block Lot": "boro_block_lot",
+        "Property Street Address or Storefront Address": "property_address",
+        "Borough": "borough_alt",
+        "Zip Code": "zip_code",
+        "Sold Date": "sold_date",
+        "Vacant on 12/31": "vacant_on_dec31_raw",
+        "Construction Reported": "construction_raw",
+        "Vacant 6/30 or Date Sold": "vacant_midyear_raw",
+        "Primary Business Activity": "primary_business_activity",
+        "Expiration date of the most recent lease": "lease_expiration",
+        "Property Number": "property_number",
+        "Property Street": "property_street",
+        "Unit": "unit",
+        "Borough1": "borough",
+        "Postcode": "postcode",
+        "Latitude": "latitude",
+        "Longitude": "longitude",
+        "Lat/Long": "lat_long_wkt",
+        "Community Board": "community_board",
+        "Council District": "council_district",
+        "Census Tract": "census_tract",
+        "BIN": "bin",
+        "BBL": "bbl",
+        "NTA": "nta_code",
+        "NTA Neighborhood": "nta_neighborhood",
+    }
+    missing = [c for c in rename_map if c not in df_raw.columns]
+    if missing:
+        raise ValueError(
+            "Storefront CSV is missing expected Open Data columns: "
+            f"{missing}. Available: {df_raw.columns.tolist()}"
         )
-    ].copy()
 
-    df = df[
-        ["Business Name", "Industry", "Address Borough", "Latitude", "Longitude"]
-    ].copy()
+    df = df_raw.rename(columns=rename_map).copy()
 
-    df = df.rename(
-        columns={
-            "Business Name": "business_name",
-            "Industry": "category",
-            "Address Borough": "borough",
-            "Latitude": "latitude",
-            "Longitude": "longitude",
-        }
-    )
+    lat = pd.to_numeric(df["latitude"], errors="coerce")
+    lon = pd.to_numeric(df["longitude"], errors="coerce")
+    if "lat_long_wkt" in df.columns:
+        wkt = df["lat_long_wkt"].astype(str)
+        lon_w = pd.to_numeric(
+            wkt.str.extract(r"POINT \((-?\d+\.?\d*)", expand=False), errors="coerce"
+        )
+        lat_w = pd.to_numeric(
+            wkt.str.extract(r"POINT \(-?\d+\.?\d*\s+(-?\d+\.?\d*)\)", expand=False),
+            errors="coerce",
+        )
+        lon = lon.where(lon.notna(), lon_w)
+        lat = lat.where(lat.notna(), lat_w)
+
+    df["latitude"] = lat
+    df["longitude"] = lon
 
     df["borough"] = standardize_borough(df["borough"])
-    df["category"] = df["category"].astype(str).str.strip().str.lower()
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+    df["reporting_year"] = pd.to_numeric(df["reporting_year"], errors="coerce")
 
-    df = df.dropna(subset=["business_name", "borough", "latitude", "longitude"])
+    v = df["vacant_on_dec31_raw"].astype(str).str.strip().str.upper()
+    df["vacant_on_dec31_yes"] = (v == "YES").astype(np.int8)
+    c = df["construction_raw"].astype(str).str.strip().str.upper()
+    df["construction_yes"] = (c == "YES").astype(np.int8)
+    m = df["vacant_midyear_raw"].astype(str).str.strip().str.upper()
+    df["vacant_midyear_yes"] = (m == "YES").astype(np.int8)
+
+    # Non-vacant filings only: exclude rows reported vacant on 12/31 or mid-year / date sold.
+    df = df[(df["vacant_on_dec31_yes"] == 0) & (df["vacant_midyear_yes"] == 0)].copy()
+
+    act = df["primary_business_activity"].fillna("").astype(str).str.strip()
+    act_upper = act.str.upper()
+    df["business_activity_category"] = act
+    df.loc[act_upper == "MISCELLANEOUS OTHER SERVICE", "business_activity_category"] = "other"
+    df.loc[act == "", "business_activity_category"] = "UNKNOWN"
+
+    keep = [
+        "filing_due_date",
+        "reporting_year",
+        "boro_block_lot",
+        "property_address",
+        "borough",
+        "zip_code",
+        "postcode",
+        "sold_date",
+        "vacant_on_dec31_raw",
+        "construction_raw",
+        "vacant_midyear_raw",
+        "vacant_on_dec31_yes",
+        "construction_yes",
+        "vacant_midyear_yes",
+        "primary_business_activity",
+        "business_activity_category",
+        "lease_expiration",
+        "property_number",
+        "property_street",
+        "unit",
+        "latitude",
+        "longitude",
+        "community_board",
+        "council_district",
+        "census_tract",
+        "bin",
+        "bbl",
+        "nta_code",
+        "nta_neighborhood",
+        "borough_alt",
+    ]
+    df = df[[c for c in keep if c in df.columns]].copy()
+
+    df = df.dropna(subset=["borough", "latitude", "longitude"])
     df = df[(df["latitude"] != 0) & (df["longitude"] != 0)]
-    df = df[df["borough"] != "OUTSIDE NYC"]
-    df = df.drop_duplicates(subset=["business_name", "latitude", "longitude"])
-
-    df["poi_type"] = "retail"
-    df["description"] = df["category"] + " store in " + df["borough"]
 
     return df.reset_index(drop=True)
 
 
-def build_poi_table(
-    restaurant_path: str | Path, license_path: str | Path
-) -> pd.DataFrame:
-    df_rest = clean_restaurant_data(restaurant_path)
-    df_retail = clean_retail_data(license_path)
-    df_poi = pd.concat([df_rest, df_retail], ignore_index=True)
-    return df_poi.reset_index(drop=True)
-
-
 # =========================================================
-# 5. Neighborhood profile data
+# 3. Neighborhood profile data
 # =========================================================
 
 
@@ -564,7 +564,7 @@ def clean_neighborhood_profiles(
 
 
 # =========================================================
-# 6. Save everything
+# 4. Save everything
 # =========================================================
 
 
@@ -572,8 +572,6 @@ def run_data_processing(
     *,
     pedestrian_path: str | Path,
     subway_path: str | Path,
-    restaurant_path: str | Path,
-    license_path: str | Path,
     nbhd_path: str | Path,
     nfh_path: str | Path | None = None,
     output_dir: str | Path = "data/processed",
@@ -583,17 +581,14 @@ def run_data_processing(
 
     ped = clean_pedestrian_data(pedestrian_path)
     subway = clean_subway_data(subway_path)
-    poi = build_poi_table(restaurant_path, license_path)
     nbhd = clean_neighborhood_profiles(nbhd_path, nfh_path=nfh_path)
 
     ped.to_csv(output_dir / "ped_clean.csv", index=False)
     subway.to_csv(output_dir / "subway_clean.csv", index=False)
-    poi.to_csv(output_dir / "poi_clean.csv", index=False)
     nbhd.to_csv(output_dir / "nbhd_clean.csv", index=False)
 
     return {
         "pedestrian": ped,
         "subway": subway,
-        "poi": poi,
         "neighborhood": nbhd,
     }

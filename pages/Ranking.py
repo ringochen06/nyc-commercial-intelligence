@@ -4,7 +4,7 @@ NYC Commercial Intelligence — Streamlit dashboard.
 Hard constraints  : sidebar controls → DuckDB SQL filters (deterministic)
 Soft ranking      : α·semantic + β·commercial_activity
                     (MinMax-scaled to [0,1] on the filtered set; β = 1 − α from one slider)
-Semantic search   : OpenAI embeddings cosine similarity on neighborhood profiles
+Semantic search   : embedding cosine similarity on neighborhood profiles (OpenAI or sentence-transformers)
 Optional Claude   : read-only SQL on filtered data
 
 Opened from the sidebar (**Ranking**) when you run `streamlit run app.py` (home = K-Selection / clustering).
@@ -104,39 +104,47 @@ ped_threshold = st.sidebar.slider(
     help="Minimum average pedestrian foot traffic.",
 )
 
-# POI density
-density_min = float(df_full["poi_density_per_km2"].min())
-density_max = float(df_full["poi_density_per_km2"].max())
+# Storefront filing density
+density_min = float(df_full["storefront_density_per_km2"].min())
+density_max = float(df_full["storefront_density_per_km2"].max())
 density_threshold = st.sidebar.slider(
-    "Min POI density (per km\u00b2)",
+    "Min storefront density (per km\u00b2)",
     min_value=density_min,
     max_value=density_max,
     value=density_min,
     step=0.5,
-    help="Minimum points-of-interest per square kilometer.",
+    help="Minimum non-vacant storefront filings per km\u00b2 (CDTA area).",
 )
 
-# Total POI
-poi_min = int(df_full["total_poi"].min())
-poi_max = int(df_full["total_poi"].max())
+# Total storefront filings
+poi_min = int(df_full["storefront_filing_count"].min())
+poi_max = int(df_full["storefront_filing_count"].max())
 poi_threshold = st.sidebar.slider(
-    "Min total POI count",
+    "Min storefront filing count",
     min_value=poi_min,
     max_value=poi_max,
     value=poi_min,
-    help="Minimum total number of businesses/POIs.",
+    help="Minimum count of storefront filings (non-vacant) in the CDTA.",
 )
 
-# Commercial activity score
-comm_min = float(df_full["commercial_activity_score"].min())
-comm_max = float(df_full["commercial_activity_score"].max())
+# Commercial activity score (log1p scale — step must be << range or Streamlit slider breaks)
+comm_min = float(pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").min())
+comm_max = float(pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").max())
+if not np.isfinite(comm_min):
+    comm_min = 0.0
+if not np.isfinite(comm_max):
+    comm_max = 1.0
+if comm_max <= comm_min:
+    comm_max = comm_min + 1e-3
+comm_span = comm_max - comm_min
+comm_step = max(0.001, min(0.5, round(comm_span / 200.0, 6)))
 comm_threshold = st.sidebar.slider(
     "Min commercial activity score",
     min_value=comm_min,
     max_value=comm_max,
     value=comm_min,
-    step=1000.0,
-    help="Minimum commercial activity score (POI count x pedestrian traffic).",
+    step=comm_step,
+    help="Minimum commercial activity score: log1p(storefront filings × avg pedestrian).",
 )
 
 # NFH minimums (same style as other hard filters; only shown when columns exist)
@@ -187,8 +195,8 @@ def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
         WHERE borough IN ({borough_list})
           AND subway_station_count >= {subway_range}
           AND avg_pedestrian >= {ped_threshold}
-          AND poi_density_per_km2 >= {density_threshold}
-          AND total_poi >= {poi_threshold}
+          AND storefront_density_per_km2 >= {density_threshold}
+          AND storefront_filing_count >= {poi_threshold}
           AND commercial_activity_score >= {comm_threshold}
           {"AND nfh_goal4_fin_shocks_score >= " + str(float(nfh_goal4_threshold)) if nfh_goal4_threshold is not None else ""}
           {"AND nfh_overall_score >= " + str(float(nfh_overall_threshold)) if nfh_overall_threshold is not None else ""}
@@ -213,8 +221,8 @@ with st.expander("View generated SQL", expanded=False):
         f"WHERE borough IN ({borough_list_display})\n"
         f"  AND subway_station_count >= {subway_range}\n"
         f"  AND avg_pedestrian >= {ped_threshold}\n"
-        f"  AND poi_density_per_km2 >= {density_threshold}\n"
-        f"  AND total_poi >= {poi_threshold}\n"
+        f"  AND storefront_density_per_km2 >= {density_threshold}\n"
+        f"  AND storefront_filing_count >= {poi_threshold}\n"
         f"  AND commercial_activity_score >= {comm_threshold}\n"
         f"{'  AND nfh_goal4_fin_shocks_score >= ' + str(float(nfh_goal4_threshold)) + chr(10) if nfh_goal4_threshold is not None else ''}"
         f"{'  AND nfh_overall_score >= ' + str(float(nfh_overall_threshold)) + chr(10) if nfh_overall_threshold is not None else ''}"
@@ -231,10 +239,10 @@ if df_filtered.empty:
 display_cols = [
     "neighborhood",
     "borough",
-    "total_poi",
+    "storefront_filing_count",
     "subway_station_count",
     "avg_pedestrian",
-    "poi_density_per_km2",
+    "storefront_density_per_km2",
     "commercial_activity_score",
     "transit_activity_score",
 ]
@@ -257,9 +265,9 @@ with st.expander("About zeros, nulls, and refreshing data", expanded=False):
 
 **`commercial_activity_score` and `transit_activity_score`**
 
-- **`commercial_activity_score` = `total_poi` × `avg_pedestrian`** (after filling missing POI counts with 0 and missing pedestrian averages with the citywide mean, then any remaining NaN pedestrian with 0).
-- **`transit_activity_score` = `subway_station_count` × `avg_pedestrian`** with the same pedestrian handling.
-- A row can still show **0** when **`total_poi` is 0** (no businesses in the data for that CDTA) or **`subway_station_count` is 0**, or when pedestrian signal is still 0 after imputation. That is a real signal from the inputs, not a broken join.
+- **`commercial_activity_score` = `log1p`(`storefront_filing_count` × `avg_pedestrian`)** (after filling missing storefront counts with 0 and missing pedestrian averages with the citywide mean, then any remaining NaN pedestrian with 0; linear product clipped at 0 before `log1p`).
+- **`transit_activity_score` = `log1p`(`subway_station_count` × `avg_pedestrian`)** with the same pedestrian handling.
+- A row can still show **0** when the **linear** product is 0 (no filings, no stations, or zero pedestrian signal after imputation), since **`log1p(0) = 0`**. The log compresses heavy tails so sidebar thresholds and MinMax blending behave more evenly across CDTAs.
 
 **If numbers look stale after changing the pipeline**
 
@@ -370,7 +378,7 @@ try:
                 {
                     "neighborhood": keep_names,
                     "semantic_similarity": sim_scores.round(4),
-                    "commercial_activity_score": act_scores.round(0).astype(int),
+                    "commercial_activity_score": act_scores.round(3),
                     "blended_score": final_scores.round(4),
                 }
             )
@@ -493,8 +501,9 @@ try:
 
 except Exception as e:
     st.warning(
-        f"Semantic search unavailable (embeddings not cached or OPENAI_API_KEY not set): {e}\n\n"
-        "Run `python -m src.embeddings` to generate embeddings first, or set OPENAI_API_KEY in .env."
+        f"Semantic search unavailable (embeddings not cached or embedding backend error): {e}\n\n"
+        "Run `python -m src.embeddings` to generate embeddings. Default: OpenAI when `OPENAI_API_KEY` is set, else local sentence-transformers; "
+        "to force local-only vectors, set `EMBEDDING_BACKEND=sentence_transformers` in `.env` (see `.env.example`)."
     )
 
 # ── Claude agent analysis ──────────────────────────────────────────────────
@@ -511,7 +520,7 @@ if st.button("Ask Claude to analyze filtered data", type="primary"):
                 f"neighborhoods that best match the user's soft preferences. "
                 f"Explain your reasoning with specific data points."
             )
-            answer = run_agent(prompt, df_filtered)
+            answer = run_agent(prompt, df_filtered, max_turns=20)
             st.markdown(answer)
         except Exception as e:
             st.error(
@@ -533,30 +542,30 @@ with col1:
         "| `borough` | categorical | NYC borough (5 values) |\n"
         "| `subway_station_count` | int | Subway stations in neighborhood |\n"
         "| `avg_pedestrian` | float | Average pedestrian count |\n"
-        "| `poi_density_per_km2` | float | Business density per km\u00b2 |\n"
-        "| `total_poi` | int | Total points of interest |\n"
-        "| `commercial_activity_score` | float | POI \u00d7 pedestrian activity |\n"
+        "| `storefront_density_per_km2` | float | Storefront filings per km\u00b2 |\n"
+        "| `storefront_filing_count` | int | Non-vacant storefront filings (CDTA) |\n"
+        "| `commercial_activity_score` | float | `log1p`(storefront filings \u00d7 avg pedestrian) |\n"
         "| `nfh_goal4_fin_shocks_score` | float | NFH Goal 4 (financial shocks) index (when column exists) |\n"
         "| `nfh_overall_score` | float | NFH overall index (when column exists) |"
     )
 
 with col2:
-    st.markdown("**Soft / embedded columns** (OpenAI `text-embedding-3-small`)")
+    st.markdown(
+        "**Soft / embedded columns** (vectors from `src/embeddings.py`: OpenAI `text-embedding-3-small` when a key is set, "
+        "else local sentence-transformers; override with `EMBEDDING_BACKEND`)"
+    )
     st.markdown(
         "| Column | Used in text profile |\n"
         "|--------|---------------------|\n"
         "| `neighborhood` | Name context |\n"
         "| `borough` | Geographic context |\n"
         "| `area_km2` | CDTA footprint (spatial scale) |\n"
-        "| `total_poi` | Business count |\n"
-        "| `category_diversity` | Count of simplified business categories (mix) |\n"
-        "| `ratio_retail` | Retail license share of POIs (business mix) |\n"
-        "| `category_entropy` | Industry diversity |\n"
+        "| `storefront_filing_count` | Storefront filing count |\n"
+        "| `category_diversity` | Count of distinct Primary Business Activity buckets |\n"
+        "| `category_entropy` | Diversity across `act_*_storefront` counts |\n"
         "| `avg_pedestrian` | Foot traffic level |\n"
         "| `subway_station_count` | Transit access |\n"
-        "| `poi_density_per_km2` | All-POI density descriptor |\n"
-        "| `retail_density_per_km2` | Simplified retail-category POI density (per km²) |\n"
-        "| `food_density_per_km2` | Simplified food-category POI density (per km²) |\n"
+        "| `storefront_density_per_km2` | Filings per km\u00b2 |\n"
         "| `nfh_median_income` | NFH median income (when column exists) |\n"
         "| `pct_bachelors_plus` | Share with bachelor's degree or higher |\n"
         "| `commute_public_transit` | Public transit commute share |\n"

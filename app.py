@@ -37,27 +37,23 @@ from config import (  # noqa: E402
 # ── Constants ────────────────────────────────────────────────────────────────
 
 CANDIDATE_FEATURES: list[str] = [
-    "total_poi",
+    "storefront_filing_count",
     "avg_pedestrian",
     "subway_station_count",
-    "poi_density_per_km2",
+    "storefront_density_per_km2",
     "commercial_activity_score",
     "transit_activity_score",
     "category_entropy",
+    "category_diversity",
     "peak_pedestrian",
-    "retail_density_per_km2",
-    "food_density_per_km2",
     "subway_density_per_km2",
-    "ratio_retail",
-    "ratio_food",
-    "food",
 ]
 
 DEFAULT_FEATURES: list[str] = [
-    "total_poi",
+    "storefront_filing_count",
     "avg_pedestrian",
     "subway_station_count",
-    "poi_density_per_km2",
+    "storefront_density_per_km2",
     "commercial_activity_score",
     "transit_activity_score",
     "category_entropy",
@@ -247,7 +243,7 @@ def _cluster_semantics_from_embeddings(
     top_n: int = 3,
     text_max_len: int = 420,
 ) -> list[dict[str, object]] | None:
-    """Per-cluster representatives using cached OpenAI embeddings (full-table row order)."""
+    """Per-cluster representatives using cached neighborhood embeddings (full-table row order)."""
     loaded = load_embeddings()
     if loaded is None:
         return None
@@ -504,8 +500,8 @@ if "ks_k_range" in st.session_state:
             "Y axis",
             options=features_s,
             index=(
-                features_s.index("total_poi")
-                if "total_poi" in features_s
+                features_s.index("storefront_filing_count")
+                if "storefront_filing_count" in features_s
                 else min(1, len(features_s) - 1)
             ),
             key="scatter_y",
@@ -680,11 +676,11 @@ if "ks_k_range" in st.session_state:
             )
             st.plotly_chart(map_fig, use_container_width=True)
 
-    # ── Semantic hints from cached OpenAI embeddings ─────────────────────────
+    # ── Semantic hints from cached embeddings ─────────────────────────────────
 
-    st.subheader("Cluster notes (cached OpenAI embeddings)")
+    st.subheader("Cluster notes (cached embeddings)")
     st.caption(
-        "Same vectors as the main app (`outputs/embeddings/`). This page does **not** call the API. "
+        "Same vectors as the main app (`outputs/embeddings/`). This page does **not** call an embedding API. "
         "Per cluster: average embedding of members, then the neighborhoods whose vectors are "
         "closest to that mean (cosine). Text is the saved profile string from `src.embeddings`."
     )

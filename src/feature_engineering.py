@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -178,76 +179,6 @@ def compute_area_features(boundary_gdf: gpd.GeoDataFrame) -> pd.DataFrame:
 
 
 # =========================================================
-# POI features
-# =========================================================
-
-
-def build_poi_features(poi_joined: pd.DataFrame) -> pd.DataFrame:
-    df = poi_joined.copy()
-    df["simple_category"] = df["category"].apply(simplify_category)
-
-    base = (
-        df.groupby(["neighborhood", "cd", "borough"], dropna=False)
-        .agg(
-            total_poi=("business_name", "count"),
-            unique_poi=("business_name", "nunique"),
-            category_diversity=("simple_category", "nunique"),
-        )
-        .reset_index()
-    )
-
-    poi_type = (
-        df.groupby(["neighborhood", "cd", "borough", "poi_type"])
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-
-    rename_map = {}
-    for c in poi_type.columns:
-        if c not in ["neighborhood", "cd", "borough"]:
-            rename_map[c] = f"num_{c}"
-    poi_type = poi_type.rename(columns=rename_map)
-
-    cat_counts = (
-        df.groupby(["neighborhood", "cd", "borough", "simple_category"])
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-
-    feat = base.merge(poi_type, on=["neighborhood", "cd", "borough"], how="left")
-    feat = feat.merge(
-        cat_counts,
-        on=["neighborhood", "cd", "borough"],
-        how="left",
-        suffixes=("", "_cat"),
-    )
-
-    # ratio
-    for col in feat.columns:
-        if col.startswith("num_"):
-            feat[col.replace("num_", "ratio_")] = safe_divide(
-                feat[col], feat["total_poi"]
-            )
-
-    # ratio of food (restaurant-type) businesses to total POI
-    if "food" in feat.columns:
-        feat["ratio_food"] = safe_divide(feat["food"], feat["total_poi"])
-
-    # entropy
-    category_cols = [c for c in ["food", "retail", "other"] if c in feat.columns]
-    if category_cols:
-        feat["category_entropy"] = feat[category_cols].apply(
-            lambda row: entropy_from_counts(row.values), axis=1
-        )
-    else:
-        feat["category_entropy"] = 0.0
-
-    return feat
-
-
-# =========================================================
 # Pedestrian features
 # =========================================================
 
@@ -286,21 +217,81 @@ def build_subway_features(subway_joined: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================================================
+# Storefront filings (points → CDTA aggregates by business activity)
+# =========================================================
+
+
+def is_act_storefront_column(name: str) -> bool:
+    s = str(name)
+    return s.startswith("act_") and s.endswith("_storefront")
+
+
+def storefront_activity_column_name(activity: str) -> str:
+    """
+    Stable feature column name for one Primary Business Activity category.
+
+    Pattern ``act_<SLUG>_storefront`` (e.g. ``act_RETAIL_storefront``).
+    ``other`` (mapped from MISCELLANEOUS OTHER SERVICE) → ``act_other_storefront``.
+    """
+    label = str(activity).strip()
+    if not label:
+        return "act_UNKNOWN_storefront"
+    if label == "other":
+        return "act_other_storefront"
+    t = label.upper().replace("&", "AND").replace("/", "_")
+    t = re.sub(r"[^A-Z0-9]+", "_", t)
+    t = re.sub(r"_+", "_", t).strip("_")
+    if not t:
+        return "act_UNKNOWN_storefront"
+    return f"act_{t}_storefront"
+
+
+def build_storefront_features(storefront_joined: pd.DataFrame) -> pd.DataFrame:
+    df = storefront_joined.copy()
+    keys = ["neighborhood", "cd", "borough"]
+    cat_col = "business_activity_category"
+    if cat_col not in df.columns:
+        df[cat_col] = "UNKNOWN"
+
+    totals = df.groupby(keys, dropna=False).size().reset_index(name="storefront_filing_count")
+
+    counts = (
+        df.groupby(keys + [cat_col], dropna=False)
+        .size()
+        .reset_index(name="_n")
+    )
+    counts["_feat_col"] = counts[cat_col].map(storefront_activity_column_name)
+    wide = counts.pivot_table(
+        index=keys,
+        columns="_feat_col",
+        values="_n",
+        aggfunc="sum",
+        fill_value=0,
+    ).reset_index()
+    wide.columns.name = None
+
+    feat = totals.merge(wide, on=keys, how="left")
+    for c in feat.columns:
+        if is_act_storefront_column(c):
+            feat[c] = pd.to_numeric(feat[c], errors="coerce").fillna(0)
+    return feat
+
+
+# =========================================================
 # Final merge
 # =========================================================
 
 
 def merge_all_features(
     area_df: pd.DataFrame,
-    poi_feat: pd.DataFrame,
     ped_feat: pd.DataFrame,
     subway_feat: pd.DataFrame,
     nbhd_clean: pd.DataFrame,
+    storefront_feat: pd.DataFrame,
 ) -> pd.DataFrame:
-    # Use CDTA-based spatial features as the master table
+    # Use CDTA-based spatial features as the master table (storefront replaces license/inspection POI).
     df = area_df.copy()
-
-    for other in [poi_feat, ped_feat, subway_feat]:
+    for other in (ped_feat, subway_feat, storefront_feat):
         df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
 
     # Neighborhood profile (MOCEJ / Planning-style CSV + optional NFH), keyed by CD ~ CDTA2020.
@@ -311,9 +302,16 @@ def merge_all_features(
     nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(
         subset=["_cd_join"], keep="first"
     )
-    profile_cols = [
-        c for c in nb.columns if c not in ("neighborhood", "borough", "cd", "_cd_join")
-    ]
+    _profile_skip = (
+        "neighborhood",
+        "borough",
+        "cd",
+        "_cd_join",
+        "pct_hispanic",
+        "pct_black",
+        "pct_asian",
+    )
+    profile_cols = [c for c in nb.columns if c not in _profile_skip]
     if profile_cols:
         n_with_key = df["_cd_join"].notna().sum()
         df = df.merge(nb[["_cd_join"] + profile_cols], on="_cd_join", how="left")
@@ -340,87 +338,93 @@ def merge_all_features(
         if pd.notna(gmed):
             df[col] = df[col].fillna(gmed)
 
-    # POI aggregates from the license spatial join: CDTAs with no in-polygon licenses stay NaN
-    # until here — fill before per-km² densities so counts and densities stay consistent.
-    for col in [
-        "total_poi",
-        "unique_poi",
-        "category_diversity",
-        "category_entropy",
-        "food",
-        "other",
-        "retail",
-    ]:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
+    # Storefront counts (CDTAs with no filings stay NaN until here)
+    if "storefront_filing_count" in df.columns:
+        df["storefront_filing_count"] = df["storefront_filing_count"].fillna(0)
     for col in df.columns:
-        if col.startswith("num_"):
+        if is_act_storefront_column(col):
             df[col] = df[col].fillna(0)
+
+    act_cols = [c for c in df.columns if is_act_storefront_column(c)]
+    if act_cols:
+        mat = df[act_cols].to_numpy(dtype=float)
+        df["category_diversity"] = (mat > 0).sum(axis=1)
+        df["category_entropy"] = [
+            entropy_from_counts(row.astype(float)) for row in mat
+        ]
+    else:
+        df["category_diversity"] = 0
+        df["category_entropy"] = 0.0
 
     # density features
     if "area_km2" in df.columns:
-        if "total_poi" in df.columns:
-            df["poi_density_per_km2"] = safe_divide(df["total_poi"], df["area_km2"])
-        if "num_restaurant" in df.columns:
-            df["restaurant_density_per_km2"] = safe_divide(
-                df["num_restaurant"], df["area_km2"]
-            )
-        if "num_retail" in df.columns:
-            df["retail_density_per_km2"] = safe_divide(df["num_retail"], df["area_km2"])
-        # Food POIs = simplified "food" category count per CDTA (same basis as `food` column).
-        if "food" in df.columns:
-            df["food_density_per_km2"] = safe_divide(df["food"], df["area_km2"])
         if "subway_station_count" in df.columns:
             df["subway_density_per_km2"] = safe_divide(
                 df["subway_station_count"], df["area_km2"]
             )
+        if "storefront_filing_count" in df.columns:
+            df["storefront_density_per_km2"] = safe_divide(
+                df["storefront_filing_count"], df["area_km2"]
+            )
 
-    # Ratio columns (0÷0 or restaurant÷0 retail) and densities: NaN → 0 for dashboard use.
-    for col in df.columns:
-        if col.startswith("ratio_") and col not in profile_cols:
-            df[col] = df[col].fillna(0)
     for col in [
-        "poi_density_per_km2",
-        "restaurant_density_per_km2",
-        "retail_density_per_km2",
-        "food_density_per_km2",
         "subway_density_per_km2",
+        "storefront_density_per_km2",
     ]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
-    for col in ["subway_station_count", "subway_density_per_km2"]:
+    for col in ["subway_station_count"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
 
+    # Pedestrian: avoid a single citywide mean for all missing CDTAs (that collapses values).
     for col in ["avg_pedestrian", "peak_pedestrian"]:
-        if col in df.columns:
-            df[col] = df[col].fillna(df[col].mean()).fillna(0)
+        if col not in df.columns:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if df["borough"].notna().any():
+            borough_med = df.groupby("borough")[col].transform("median")
+            df[col] = df[col].fillna(borough_med)
+        gmed = df[col].median()
+        if pd.notna(gmed):
+            df[col] = df[col].fillna(gmed)
+        df[col] = df[col].fillna(0)
 
     if "pedestrian_count_points" in df.columns:
         df["pedestrian_count_points"] = df["pedestrian_count_points"].fillna(0)
 
-    # interaction features (after POI / subway / pedestrian fills so products are not stuck at 0)
-    if {"avg_pedestrian", "total_poi"}.issubset(df.columns):
-        df["commercial_activity_score"] = df["avg_pedestrian"] * df["total_poi"]
+    if {"avg_pedestrian", "storefront_filing_count"}.issubset(df.columns):
+        raw_comm = df["avg_pedestrian"] * df["storefront_filing_count"]
+        df["commercial_activity_score"] = np.log1p(np.maximum(raw_comm, 0))
 
     if {"subway_station_count", "avg_pedestrian"}.issubset(df.columns):
-        df["transit_activity_score"] = df["subway_station_count"] * df["avg_pedestrian"]
+        raw_trans = df["subway_station_count"] * df["avg_pedestrian"]
+        df["transit_activity_score"] = np.log1p(np.maximum(raw_trans, 0))
 
-    # Final feature table: drop redundant / presentation-only columns (still used above).
     _drop_final = [
-        "unique_poi",
-        "retail",  # simplified-category count; license-side signals remain (e.g. num_retail, ratio_retail)
         "median_household_income",  # use nfh_median_income in downstream / embeddings
     ]
     df = df.drop(columns=[c for c in _drop_final if c in df.columns], errors="ignore")
     _nfh_ranks = [
-        c
-        for c in df.columns
-        if str(c).startswith("nfh_") and str(c).endswith("_rank")
+        c for c in df.columns if str(c).startswith("nfh_") and str(c).endswith("_rank")
     ]
     if _nfh_ranks:
         df = df.drop(columns=_nfh_ranks, errors="ignore")
+
+    # Keep pop counts + total population proxy adjacent for readability
+    cols = list(df.columns)
+    pop_block = [
+        c
+        for c in ("pop_black", "pop_hispanic", "pop_asian", "total_population_proxy")
+        if c in cols
+    ]
+    if pop_block:
+        block_set = set(pop_block)
+        pos = min(cols.index(c) for c in pop_block)
+        before = [c for i, c in enumerate(cols) if i < pos and c not in block_set]
+        after = [c for i, c in enumerate(cols) if i >= pos and c not in block_set]
+        df = df[before + pop_block + after]
 
     return df
 
@@ -430,63 +434,66 @@ def merge_all_features(
 # =========================================================
 
 
+def empty_storefront_features(area_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-CDTA zero row when no raw storefront file is available."""
+    out = area_df[["neighborhood", "cd", "borough"]].copy()
+    out["storefront_filing_count"] = 0
+    return out
+
+
 def run_feature_engineering(
     *,
-    poi_path: str | Path,
     pedestrian_path: str | Path,
     subway_path: str | Path,
     nbhd_clean_path: str | Path,
     boundary_path: str | Path,
+    storefront_raw_path: str | Path | None = None,
     output_dir: str | Path = "data/processed",
 ) -> dict[str, pd.DataFrame]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    poi = pd.read_csv(poi_path)
+    try:
+        from data_processing import clean_storefront_data
+    except ImportError:
+        from src.data_processing import clean_storefront_data
+
     ped = pd.read_csv(pedestrian_path)
     subway = pd.read_csv(subway_path)
     nbhd = pd.read_csv(nbhd_clean_path)
 
     boundary_gdf = load_boundaries(boundary_path)
+    area_df = compute_area_features(boundary_gdf)
 
-    poi_joined = spatial_join_points(poi, boundary_gdf)
     ped_joined = spatial_join_points(ped, boundary_gdf)
     subway_joined = spatial_join_points(subway, boundary_gdf)
 
-    area_df = compute_area_features(boundary_gdf)
-    poi_feat = build_poi_features(poi_joined)
+    if storefront_raw_path is not None and Path(storefront_raw_path).exists():
+        sf_clean = clean_storefront_data(storefront_raw_path)
+        sf_joined = spatial_join_points(sf_clean, boundary_gdf)
+        storefront_feat = build_storefront_features(sf_joined)
+    else:
+        storefront_feat = empty_storefront_features(area_df)
+
     ped_feat = build_pedestrian_features(ped_joined)
     subway_feat = build_subway_features(subway_joined)
 
     final_df = merge_all_features(
         area_df=area_df,
-        poi_feat=poi_feat,
         ped_feat=ped_feat,
         subway_feat=subway_feat,
         nbhd_clean=nbhd,
+        storefront_feat=storefront_feat,
     )
 
-    poi_joined.drop(columns="geometry", errors="ignore").to_csv(
-        output_dir / "poi_with_neighborhood.csv", index=False
-    )
-    ped_joined.drop(columns="geometry", errors="ignore").to_csv(
-        output_dir / "ped_with_neighborhood.csv", index=False
-    )
-    subway_joined.drop(columns="geometry", errors="ignore").to_csv(
-        output_dir / "subway_with_neighborhood.csv", index=False
-    )
-
-    poi_feat.to_csv(output_dir / "poi_features.csv", index=False)
-    ped_feat.to_csv(output_dir / "ped_features.csv", index=False)
-    subway_feat.to_csv(output_dir / "subway_features.csv", index=False)
+    storefront_feat.to_csv(output_dir / "storefront_features.csv", index=False)
     final_df.to_csv(output_dir / "neighborhood_features_final.csv", index=False)
 
     return {
-        "poi_joined": poi_joined,
         "ped_joined": ped_joined,
         "subway_joined": subway_joined,
-        "poi_features": poi_feat,
         "ped_features": ped_feat,
         "subway_features": subway_feat,
+        "storefront_features": storefront_feat,
         "neighborhood_features": final_df,
     }

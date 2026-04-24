@@ -31,15 +31,14 @@ TOOLS: list[dict[str, Any]] = [
         "name": "run_sql",
         "description": (
             "Execute a read-only DuckDB SQL query against the table `neighborhoods`. "
-            "The table contains one row per NYC neighborhood with columns: "
-            "neighborhood, cd, borough, area_km2, total_poi, category_diversity, "
-            "food, other, num_restaurant, num_retail, ratio_retail, ratio_restaurant, ratio_food, "
-            "category_entropy, avg_pedestrian, peak_pedestrian, pedestrian_count_points, "
-            "subway_station_count, poi_density_per_km2, retail_density_per_km2, "
-            "subway_density_per_km2, commercial_activity_score, transit_activity_score, "
+            "The table contains one row per NYC CDTA with columns including: "
+            "neighborhood, cd, borough, area_km2, storefront_filing_count, storefront_density_per_km2, "
+            "act_*_storefront (counts by primary business activity), category_diversity, category_entropy, "
+            "avg_pedestrian, peak_pedestrian, pedestrian_count_points, "
+            "subway_station_count, subway_density_per_km2, commercial_activity_score, transit_activity_score, "
             "and neighborhood profile fields when present (e.g. nfh_median_income, "
             "pct_bachelors_plus, commute_public_transit, food_services, total_businesses, "
-            "nfh_overall_score, pct_hispanic, pct_black, pct_asian). "
+            "nfh_overall_score, pop_black, pop_hispanic, pop_asian, total_population_proxy). "
             "Only SELECT statements are allowed."
         ),
         "input_schema": {
@@ -85,9 +84,20 @@ def _execute_sql(df: pd.DataFrame, sql: str) -> str:
         con.register("neighborhoods", df)
         result = con.execute(sql).fetchdf()
         con.close()
-        return result.to_markdown(index=False)
     except Exception as exc:
         return f"SQL error: {exc}"
+
+    if len(result) > 150:
+        result = result.head(150).copy()
+        note = "\n\n_(first 150 rows only)_"
+    else:
+        note = ""
+
+    try:
+        return result.to_markdown(index=False) + note
+    except ImportError:
+        # pandas needs optional `tabulate` for to_markdown; keep agent usable without it
+        return result.to_string(index=False) + note
 
 
 # ── Agent loop ──────────────────────────────────────────────────────────────
@@ -98,7 +108,7 @@ def run_agent(
     df: pd.DataFrame,
     *,
     model: str | None = None,
-    max_turns: int = 6,
+    max_turns: int = 16,
 ) -> str:
     """
     Send *user_query* to Claude with tool access to the filtered DataFrame.
@@ -114,10 +124,11 @@ def run_agent(
         "neighborhood for a new business. You have access to a DuckDB table "
         "called `neighborhoods` that contains pre-filtered NYC neighborhood "
         "data (hard filters like borough and minimum subway count were already "
-        "applied). Use the run_sql tool to explore the data, compute rankings, "
-        "or answer analytical questions. When you have enough information, call "
-        "the done tool with a concise, helpful markdown answer. Always refer to "
-        "neighborhoods by their full name."
+        "applied). Use the run_sql tool at most a few times (e.g. top-N by "
+        "commercial_activity_score, or a simple aggregate). You MUST finish by "
+        "calling the done tool with your final markdown answer—do not loop on "
+        "exploratory SQL indefinitely. If one query is enough, call done "
+        "immediately after. Always refer to neighborhoods by their full name."
     )
 
     messages: list[dict[str, Any]] = [
@@ -166,4 +177,8 @@ def run_agent(
 
         messages.append({"role": "user", "content": tool_results})
 
-    return "Agent reached maximum turns without a final answer."
+    return (
+        "Agent reached the turn limit without calling **done**. "
+        "Try again, or increase `max_turns` in `run_agent` if the task needs "
+        "more SQL steps."
+    )

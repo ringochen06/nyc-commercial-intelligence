@@ -5,15 +5,12 @@ print("Step 1: running data processing...")
 processed = run_data_processing(
     pedestrian_path="data/raw/Bi-Annual_Pedestrian_Counts.csv",
     subway_path="data/raw/MTA_Subway_Stations_20260329.csv",
-    restaurant_path="data/raw/DOHMH_New_York_City_Restaurant_Inspection_Results_20260329.csv",
-    license_path="data/raw/legally-operating-businesses-nyc.csv",
     nbhd_path="data/raw/Public - Neighborhood Profiles 2018 - All.csv",
     nfh_path="data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool_20260415.csv",
-    output_dir="data/processed"
+    output_dir="data/processed",
 )
 
 print("Data processing finished.")
-print("POI shape:", processed["poi"].shape)
 print("Subway shape:", processed["subway"].shape)
 print("Pedestrian shape:", processed["pedestrian"].shape)
 print("Neighborhood shape:", processed["neighborhood"].shape)
@@ -21,15 +18,14 @@ print("Neighborhood shape:", processed["neighborhood"].shape)
 print("\nStep 2: running feature engineering...")
 
 outputs = run_feature_engineering(
-    poi_path="data/processed/poi_clean.csv",
     pedestrian_path="data/processed/ped_clean.csv",
     subway_path="data/processed/subway_clean.csv",
     nbhd_clean_path="data/processed/nbhd_clean.csv",
     boundary_path="data/raw/nyc_boundaries/nycdta2020.shp",
-    output_dir="data/processed"
-
+    storefront_raw_path="data/raw/Storefronts_Reported_Vacant_or_Not_20260424.csv",
+    output_dir="data/processed",
 )
-print(f"poi output: {outputs.get('poi_features').columns.tolist()}")
+print("storefront_features columns:", outputs["storefront_features"].columns.tolist())
 
 # `neighborhood_features_final.csv` is written inside `run_feature_engineering`.
 df_final = outputs["neighborhood_features"]

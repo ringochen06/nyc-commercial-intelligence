@@ -226,6 +226,11 @@ def is_act_storefront_column(name: str) -> bool:
     return s.startswith("act_") and s.endswith("_storefront")
 
 
+def is_act_density_column(name: str) -> bool:
+    s = str(name)
+    return s.startswith("act_") and s.endswith("_density")
+
+
 def storefront_activity_column_name(activity: str) -> str:
     """
     Stable feature column name for one Primary Business Activity category.
@@ -356,6 +361,12 @@ def merge_all_features(
         df["category_diversity"] = 0
         df["category_entropy"] = 0.0
 
+    # business activity density: share of total filings per category (zero-safe)
+    if "storefront_filing_count" in df.columns and act_cols:
+        for col in act_cols:
+            density_col = col[:-len("_storefront")] + "_density"
+            df[density_col] = safe_divide(df[col], df["storefront_filing_count"]).fillna(0)
+
     # density features
     if "area_km2" in df.columns:
         if "subway_station_count" in df.columns:
@@ -397,7 +408,8 @@ def merge_all_features(
     if {"avg_pedestrian", "storefront_filing_count"}.issubset(df.columns):
         raw_comm = df["avg_pedestrian"] * df["storefront_filing_count"]
         df["commercial_activity_score"] = np.log1p(np.maximum(raw_comm, 0))
-
+        print(f"Computed commercial_activity_score: {df['commercial_activity_score'].describe()}")
+    
     if {"subway_station_count", "avg_pedestrian"}.issubset(df.columns):
         raw_trans = df["subway_station_count"] * df["avg_pedestrian"]
         df["transit_activity_score"] = np.log1p(np.maximum(raw_trans, 0))

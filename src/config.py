@@ -11,6 +11,7 @@ import streamlit as st
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_PROCESSED = REPO_ROOT / "data" / "processed"
 NEIGHBORHOOD_FEATURES_CSV = DATA_PROCESSED / "neighborhood_features_final.csv"
+NEIGHBORHOOD_TEST_FEATURES_CSV = Path(__file__).parent.parent / "tests" / "data" / "neighborhood_features_final.csv"
 CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
 
 try:
@@ -22,6 +23,9 @@ except ImportError:
 @st.cache_data
 def load_neighborhood_features() -> pd.DataFrame:
     return pd.read_csv(NEIGHBORHOOD_FEATURES_CSV)
+@st.cache_data
+def load_neighborhood_test_features() -> pd.DataFrame:
+    return pd.read_csv(NEIGHBORHOOD_TEST_FEATURES_CSV)
 
 
 @st.cache_data(show_spinner=False)

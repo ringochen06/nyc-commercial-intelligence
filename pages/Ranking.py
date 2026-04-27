@@ -39,8 +39,9 @@ from config import (  # noqa: E402
     CDTA_SHAPE_PATH,
     load_cdta_gdf_for_map,
     load_neighborhood_features,
+    load_neighborhood_test_features,
 )
-from feature_engineering import is_act_storefront_column  # noqa: E402
+from feature_engineering import is_act_density_column, is_act_storefront_column  # noqa: E402
 
 DEFAULT_SOFT_QUERY = (
     "quiet residential area suitable for boutique retail with good subway access"
@@ -64,7 +65,16 @@ st.caption(
 
 # ── Load data ───────────────────────────────────────────────────────────────
 
-df_full = load_neighborhood_features()
+_data_choice = st.sidebar.radio(
+    "Data vintage",
+    options=["Present", "Past"],
+    index=0,
+    help=(
+        "**Present** — `data/processed/neighborhood_features_final.csv` (latest pipeline run).\n\n"
+        "**Past** — `tests/data/neighborhood_features_final.csv` (historical snapshot used for testing)."
+    ),
+)
+df_full = load_neighborhood_features() if _data_choice == "Present" else load_neighborhood_test_features()
 
 # ── Sidebar: Hard Filters ──────────────────────────────────────────────────
 
@@ -333,6 +343,23 @@ st.sidebar.caption(
     f"\u03b2 — commercial activity = 1 − \u03b1 → \u03b1={alpha:.3f}, \u03b2={beta:.3f}"
 )
 
+# ── Business activity density column selector ───────────────────────────────
+
+_density_cols = sorted(c for c in df_full.columns if is_act_density_column(c))
+
+
+def _density_label(col: str) -> str:
+    return col.removeprefix("act_").removesuffix("_density").replace("_", " ").title()
+
+
+selected_density_col: str | None = None
+if _density_cols:
+    selected_density_col = st.selectbox(
+        "Business activity for density column in ranking table",
+        options=_density_cols,
+        format_func=_density_label,
+    )
+
 # ── Soft ranking: semantic + commercial activity ────────────────────────────
 
 st.subheader("Soft ranking (α·semantic + β·commercial activity)")
@@ -401,6 +428,16 @@ try:
             .reset_index(drop=True)
         )
 
+        _density_col_label: str | None = None
+        if selected_density_col and selected_density_col in df_filtered.columns:
+            _density_col_label = (
+                f"present {_density_label(selected_density_col).lower()} density"
+            )
+            _density_merge = df_filtered[["neighborhood", selected_density_col]].rename(
+                columns={selected_density_col: _density_col_label}
+            )
+            ranking_df = ranking_df.merge(_density_merge, on="neighborhood", how="left")
+
         ranking_df.index = ranking_df.index + 1
         ranking_df.index.name = "rank"
 
@@ -426,6 +463,8 @@ try:
                 "commercial_activity_score",
                 "blended_score",
             ]
+            if _density_col_label and _density_col_label in rk.columns:
+                show_cols.append(_density_col_label)
             ranking_df = rk[show_cols].set_index("rank")
         else:
             st.caption(

@@ -378,7 +378,11 @@ def clean_nfh_profiles(nfh_path: str | Path) -> pd.DataFrame:
     """
     Build one row per CD with selected Neighborhood Financial Health features.
     """
-    df_nfh = pd.read_csv(nfh_path)
+    nfh_path = Path(nfh_path)
+    if nfh_path.suffix.lower() in (".xlsx", ".xls"):
+        df_nfh = pd.read_excel(nfh_path)
+    else:
+        df_nfh = pd.read_csv(nfh_path, encoding="latin-1")
 
     base_cols = [
         "CD",

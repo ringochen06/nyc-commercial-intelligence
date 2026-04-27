@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from src.config import load_neighborhood_test_features
 import streamlit as st
 from plotly.subplots import make_subplots
 from sklearn.metrics import silhouette_score as sklearn_silhouette_score
@@ -76,7 +77,8 @@ st.caption(
 # ── Load data ────────────────────────────────────────────────────────────────
 
 
-df_full = load_neighborhood_features()
+# df_full = load_neighborhood_features()
+df_full = load_neighborhood_test_features()
 
 # ── Sidebar controls ─────────────────────────────────────────────────────────
 

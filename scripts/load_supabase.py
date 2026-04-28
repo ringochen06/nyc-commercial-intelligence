@@ -98,17 +98,26 @@ def main() -> None:
         )
 
     # Build the row payload.
+    # Pandas widens int columns to float64 when any value is NaN, so the CSV
+    # delivers e.g. 102.0 for subway_station_count. Postgres rejects floats
+    # for integer columns ("invalid input syntax for type integer: 102.0"),
+    # so coerce whole-number floats to ints. Ints serialize fine into both
+    # integer and double-precision columns.
     db_df = to_db_columns(df)
     rows: list[dict] = []
     for i, row in db_df.iterrows():
-        record = {}
+        record: dict = {}
         for col, val in row.items():
             if pd.isna(val):
                 record[col] = None
-            elif isinstance(val, (np.integer,)):
+                continue
+            if isinstance(val, (np.integer,)):
                 record[col] = int(val)
             elif isinstance(val, (np.floating,)):
-                record[col] = float(val)
+                f = float(val)
+                record[col] = int(f) if f.is_integer() else f
+            elif isinstance(val, float):
+                record[col] = int(val) if val.is_integer() else val
             else:
                 record[col] = val
         record["embedding"] = emb[i].tolist()

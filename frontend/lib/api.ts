@@ -23,7 +23,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = text;
     try {
       const j = JSON.parse(text);
-      detail = j.detail || j.message || text;
+      const raw = j.detail ?? j.message ?? text;
+      if (Array.isArray(raw)) {
+        // FastAPI 422 returns detail as an array of {loc, msg, type, input}.
+        detail = raw
+          .map((e: any) => {
+            const loc = Array.isArray(e?.loc) ? e.loc.join(".") : "";
+            return `${loc}: ${e?.msg ?? JSON.stringify(e)}`;
+          })
+          .join("; ");
+      } else if (typeof raw === "object" && raw !== null) {
+        detail = JSON.stringify(raw);
+      } else {
+        detail = String(raw);
+      }
     } catch {}
     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }

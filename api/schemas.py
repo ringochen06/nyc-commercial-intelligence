@@ -53,10 +53,10 @@ class ClusterResponse(BaseModel):
 
 class HardFilters(BaseModel):
     boroughs: list[str] | None = None
-    min_subway_stations: int | None = None
-    min_avg_pedestrian: int | None = None
+    min_subway_stations: float | None = None
+    min_avg_pedestrian: float | None = None
     min_storefront_density: float | None = None
-    min_storefront_filings: int | None = None
+    min_storefront_filings: float | None = None
     min_commercial_activity: float | None = None
     min_nfh_goal4: float | None = None
     min_nfh_overall: float | None = None

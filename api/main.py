@@ -307,16 +307,16 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
 
     if filters.min_subway_stations is not None:
         where.append("subway_station_count >= ?")
-        params.append(int(filters.min_subway_stations))
+        params.append(float(filters.min_subway_stations))
     if filters.min_avg_pedestrian is not None:
         where.append("avg_pedestrian >= ?")
-        params.append(int(filters.min_avg_pedestrian))
+        params.append(float(filters.min_avg_pedestrian))
     if filters.min_storefront_density is not None:
         where.append("storefront_density_per_km2 >= ?")
         params.append(float(filters.min_storefront_density))
     if filters.min_storefront_filings is not None:
         where.append("storefront_filing_count >= ?")
-        params.append(int(filters.min_storefront_filings))
+        params.append(float(filters.min_storefront_filings))
     if filters.min_commercial_activity is not None:
         where.append("commercial_activity_score >= ?")
         params.append(float(filters.min_commercial_activity))

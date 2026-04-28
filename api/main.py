@@ -32,7 +32,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from api.loaders import (
-    CDTA_SHAPE_PATH,
+    CDTA_GEO_JSON,
     load_cdta_bounds,
     load_cdta_geojson,
     load_features,
@@ -56,7 +56,7 @@ from src.embeddings import (  # noqa: E402
     embed_neighborhood_features,
     embed_texts,
 )
-from src.feature_engineering import (  # noqa: E402
+from src.columns import (  # noqa: E402
     is_act_density_column,
     is_act_storefront_column,
 )
@@ -151,9 +151,10 @@ def _cluster_brief(centroid: np.ndarray, features: list[str], hi_thr: float = 0.
 def health() -> dict[str, str | bool]:
     return {
         "status": "ok",
-        "has_cdta_shapefile": CDTA_SHAPE_PATH.is_file(),
+        "has_cdta_geojson": CDTA_GEO_JSON.is_file(),
         "has_anthropic_key": bool(os.getenv("ANTHROPIC_API_KEY")),
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "supabase_configured": bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
     }
 
 
@@ -335,8 +336,93 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
     return sql, params
 
 
+def _supabase_client():
+    """Return a Supabase client if env vars are set, else None. Lazy-imports supabase-py."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        return None
+    from supabase import create_client  # imported lazily so the dep is optional
+
+    return create_client(url, key)
+
+
+def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
+    """Query Supabase via the match_neighborhoods RPC, then blend in Python."""
+    query_embedding = embed_texts([req.query])[0].tolist()
+
+    # match_count default in the SQL is 50; bump to 200 to comfortably cover all CDTAs.
+    rpc_args = {
+        "query_embedding": query_embedding,
+        "boroughs": req.filters.boroughs or None,
+        "min_subway_station_count": (
+            int(req.filters.min_subway_stations) if req.filters.min_subway_stations is not None else None
+        ),
+        "min_avg_pedestrian": req.filters.min_avg_pedestrian,
+        "min_storefront_density": req.filters.min_storefront_density,
+        "min_storefront_filing_count": (
+            int(req.filters.min_storefront_filings) if req.filters.min_storefront_filings is not None else None
+        ),
+        "min_commercial_activity": req.filters.min_commercial_activity,
+        "min_nfh_overall_score": req.filters.min_nfh_overall,
+        "min_nfh_goal4_score": req.filters.min_nfh_goal4,
+        "match_count": 200,
+    }
+    resp = client.rpc("match_neighborhoods", rpc_args).execute()
+    rows_raw: list[dict] = resp.data or []
+
+    if not rows_raw:
+        return RankResponse(rows=[], n_total=0, n_filtered=0, sql="-- via supabase RPC --")
+
+    sims = np.array([float(r["similarity"]) for r in rows_raw], dtype=float)
+    activity = np.array([float(r.get("commercial_activity_score") or 0.0) for r in rows_raw], dtype=float)
+
+    X = np.column_stack([sims, activity])
+    if X.shape[0] == 1:
+        scaled = np.ones((1, 2)) * 0.5
+    else:
+        scaled = MinMaxScaler().fit_transform(X)
+    alpha, beta = req.alpha, 1.0 - req.alpha
+    final = scaled @ np.array([alpha, beta], dtype=float)
+
+    order = np.argsort(-final)
+    cmap = req.cluster_assignments or {}
+    bmap = req.cluster_briefs or {}
+    out: list[RankRow] = []
+    for rank_pos, idx in enumerate(order, start=1):
+        r = rows_raw[idx]
+        name = r["neighborhood"]
+        cd = r.get("cd")
+        borough = r.get("borough")
+        cluster_id = cmap.get(name)
+        out.append(
+            RankRow(
+                rank=rank_pos,
+                neighborhood=name,
+                cd=cd,
+                borough=borough,
+                map_key=f"{cd} | {borough}" if cd and borough else None,
+                semantic_similarity=float(sims[idx]),
+                commercial_activity_score=float(activity[idx]),
+                blended_score=float(final[idx]),
+                cluster=int(cluster_id) if cluster_id is not None else None,
+                cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,
+            )
+        )
+    return RankResponse(rows=out, n_total=len(rows_raw), n_filtered=len(rows_raw), sql="-- via supabase RPC --")
+
+
 @app.post("/api/rank", response_model=RankResponse)
 def rank(req: RankRequest) -> RankResponse:
+    # Prefer Supabase when configured.
+    client = _supabase_client()
+    if client is not None:
+        try:
+            return _rank_via_supabase(req, client)
+        except Exception as e:
+            logger.warning("Supabase rank failed, falling back to CSV: %s", e)
+
+    # Fallback: CSV + DuckDB + cached embeddings.
     df_full = load_features(req.vintage)
     boroughs_in_data = sorted(df_full["borough"].dropna().unique().tolist())
 
@@ -349,7 +435,6 @@ def rank(req: RankRequest) -> RankResponse:
     if df_filtered.empty:
         return RankResponse(rows=[], n_total=len(df_full), n_filtered=0, sql=sql)
 
-    # Embeddings
     try:
         all_embeddings, _all_texts = embed_neighborhood_features()
     except Exception as e:

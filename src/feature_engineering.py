@@ -221,14 +221,11 @@ def build_subway_features(subway_joined: pd.DataFrame) -> pd.DataFrame:
 # =========================================================
 
 
-def is_act_storefront_column(name: str) -> bool:
-    s = str(name)
-    return s.startswith("act_") and s.endswith("_storefront")
-
-
-def is_act_density_column(name: str) -> bool:
-    s = str(name)
-    return s.startswith("act_") and s.endswith("_density")
+# Re-exported from columns.py so importing these helpers does not pull in geopandas.
+try:
+    from src.columns import is_act_density_column, is_act_storefront_column  # noqa: F401
+except ImportError:
+    from columns import is_act_density_column, is_act_storefront_column  # noqa: F401
 
 
 def storefront_activity_column_name(activity: str) -> str:

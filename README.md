@@ -127,7 +127,7 @@ app.py       Streamlit entry: **K-Selection / clustering** home (`streamlit run 
 ```bash
 uv venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-uv pip install -r requirements.txt
+uv pip install -r requirements-dev.txt    # local: includes Streamlit, GIS, sentence-transformers, pytest
 ```
 
 ### Fallback (pip)
@@ -135,8 +135,10 @@ uv pip install -r requirements.txt
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+`requirements.txt` is the **slim production set** used by Railway (no streamlit, no torch, no geopandas — ~2 min build). `requirements-dev.txt` extends it with the local Streamlit dashboard, the GIS stack, and tests.
 
 ### Build features and embeddings, then run the app
 
@@ -202,10 +204,28 @@ The repo also ships as a two-tier web app: **FastAPI on Railway** (Python pipeli
 2. **Push to GitHub**, then on [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway auto-detects Python via `requirements.txt`, `runtime.txt` (Python 3.11), and `railway.json` / `Procfile` (start command, healthcheck path).
 3. **Set environment variables** on the Railway service (Settings → Variables):
    - `FRONTEND_ORIGINS` — comma-separated list of Vercel URLs that may call the API (e.g. `https://nyc-commercial.vercel.app`). Without this, only `http://localhost:3000` is allowed.
-   - `OPENAI_API_KEY` — required if you don't pre-build embeddings; otherwise set `EMBEDDING_BACKEND=sentence_transformers` and the server downloads `all-MiniLM-L6-v2` on first call.
+   - `OPENAI_API_KEY` — required at runtime to embed the user's query.
    - `ANTHROPIC_API_KEY` — optional, only for the `/api/agent` endpoint.
-4. **Memory:** sentence-transformers + torch + geopandas needs the **Hobby plan** (8 GB) — the free tier (512 MB) will OOM. If you stay free-tier, use OpenAI embeddings only and pre-cache them under `outputs/embeddings/` so the server never loads `sentence-transformers`.
-5. **Embeddings cache:** the simplest path is to commit `outputs/embeddings/neighborhood_embeddings*.npy` and `neighborhood_texts.npy` to git so they ship with the deploy. Alternative: pull from your `ringoch/nyc-commercial-data` HF dataset on startup.
+   - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` — optional but **strongly recommended** (see step 4). When both are set, `/api/rank` calls `public.match_neighborhoods` (pgvector cosine + filters in SQL) instead of loading the full DataFrame and the embeddings cache. Falls back to the CSV path if either is missing.
+4. **Memory:** the slim `requirements.txt` (no torch, no geopandas, no streamlit) fits on Railway's free tier. Build is ~1.5–2 min.
+5. **Embeddings cache** is only used when Supabase is **not** configured. In that mode the server builds the cache lazily in `outputs/embeddings/` on first `/api/rank` call (slow on cold start). Going the Supabase path is the recommended deploy mode.
+
+### Supabase (optional; recommended for production)
+
+The repo includes Postgres migrations under `supabase/migrations/` that create a `public.neighborhoods` table with a `vector(1536)` embedding column, an HNSW cosine index, RLS policies for anon-key reads, and a `match_neighborhoods` RPC that does cosine similarity + hard-filter SQL in one round trip.
+
+To set up:
+1. Create a Supabase project (note the URL and the **service-role** key — server-only).
+2. Apply migrations: install the Supabase CLI (`brew install supabase/tap/supabase`), then `supabase link --project-ref <ref>` and `supabase db push`. (Or paste each `supabase/migrations/*.sql` into the SQL editor in numeric order.)
+3. Populate the table once with `scripts/load_supabase.py`:
+   ```bash
+   export SUPABASE_URL=https://<ref>.supabase.co
+   export SUPABASE_SERVICE_ROLE_KEY=...    # never commit
+   export OPENAI_API_KEY=...
+   uv run python scripts/load_supabase.py
+   ```
+   The script handles the `act_OTHER_*` / `act_other_*` case collision (Postgres folds identifiers to lowercase; the originally-lowercase variant is renamed to `*_lower_*` to match the schema).
+4. Set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` on Railway. `/api/rank` will switch to the Supabase RPC automatically.
 
 ### 2. Frontend on Vercel
 
@@ -230,6 +250,6 @@ Once deployed, copy the production Vercel URL back into Railway's `FRONTEND_ORIG
 ### Deploy gotchas
 
 - **Cold starts:** Railway sleeps idle services on Hobby. First request takes 5–15s to wake. The frontend handles this with loading states; for demos, hit `/api/health` from a cron.
-- **CDTA shapefile** (`data/raw/nyc_boundaries/nycdta2020.shp`) is committed (~1.5 MB) and ships with the Railway build, so the choropleth maps work without an external download.
+- **CDTA boundaries** ship as a pre-rendered `data/processed/cdta_geo.json` (~4 MB) so Railway doesn't need geopandas. Regenerate locally with `uv run python scripts/build_cdta_geojson.py` after editing the shapefile (requires geopandas — installed via `requirements-dev.txt`).
 - **The clustering "Run Analysis" call recomputes K-means on every request.** For the 71-CDTA dataset this is sub-second; if you swap in a larger feature table, add server-side caching keyed on `(features, max_k, vintage, boroughs)`.
-- The Streamlit app (`app.py`) and the FastAPI app share the same `src/` modules — keep both working when you change `src/`.
+- The Streamlit app (`app.py`) and the FastAPI app share the same `src/` modules — keep both working when you change `src/`. The Streamlit-specific `@st.cache_data` import in `src/config.py` is wrapped in try/except so the FastAPI deploy doesn't need streamlit installed.

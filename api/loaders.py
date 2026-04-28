@@ -1,21 +1,25 @@
 """Cached data loaders for the FastAPI backend.
 
-Mirrors src/config.py but without streamlit decorators — uses functools.lru_cache
-so the same DataFrame is reused across requests in a single worker.
+Reads CSVs and the pre-rendered CDTA GeoJSON. No geopandas at runtime;
+the shapefile is converted once to data/processed/cdta_geo.json by
+scripts/build_cdta_geojson.py.
 """
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 
-import geopandas as gpd
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_PROCESSED = REPO_ROOT / "data" / "processed"
 NEIGHBORHOOD_FEATURES_CSV = DATA_PROCESSED / "neighborhood_features_final.csv"
 NEIGHBORHOOD_TEST_FEATURES_CSV = REPO_ROOT / "tests" / "data" / "neighborhood_features_final.csv"
+CDTA_GEO_JSON = DATA_PROCESSED / "cdta_geo.json"
+
+# Diagnostic only (reported by /api/health). Runtime no longer reads it.
 CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
 
 
@@ -23,30 +27,25 @@ CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.sh
 def load_features(vintage: str = "present") -> pd.DataFrame:
     path = NEIGHBORHOOD_FEATURES_CSV if vintage == "present" else NEIGHBORHOOD_TEST_FEATURES_CSV
     if not path.is_file():
-        raise FileNotFoundError(f"Feature CSV not found at {path}. Run the pipeline or include the file in the deployment.")
+        raise FileNotFoundError(f"Feature CSV not found at {path}.")
     return pd.read_csv(path)
 
 
 @lru_cache(maxsize=1)
+def _load_geo_payload() -> dict:
+    if CDTA_GEO_JSON.is_file():
+        return json.loads(CDTA_GEO_JSON.read_text())
+    return {
+        "geojson": {"type": "FeatureCollection", "features": []},
+        "bounds": {"minx": -74.26, "miny": 40.49, "maxx": -73.69, "maxy": 40.92},
+        "center": {"lat": 40.705, "lon": -73.975},
+    }
+
+
 def load_cdta_geojson() -> dict:
-    """CDTA polygons as GeoJSON with map_key = 'cd | borough' on each feature."""
-    from src.feature_engineering import load_boundaries
-
-    if not CDTA_SHAPE_PATH.is_file():
-        return {"type": "FeatureCollection", "features": []}
-    gdf = load_boundaries(CDTA_SHAPE_PATH)
-    out: gpd.GeoDataFrame = gdf.copy()
-    out["map_key"] = out["cd"] + " | " + out["borough"]
-    return out[["neighborhood", "cd", "borough", "map_key", "geometry"]].__geo_interface__
+    return _load_geo_payload()["geojson"]
 
 
-@lru_cache(maxsize=1)
 def load_cdta_bounds() -> tuple[float, float, float, float]:
-    """Total bounds (minx, miny, maxx, maxy) — used for map centering."""
-    from src.feature_engineering import load_boundaries
-
-    if not CDTA_SHAPE_PATH.is_file():
-        return (-74.26, 40.49, -73.69, 40.92)
-    gdf = load_boundaries(CDTA_SHAPE_PATH)
-    b = gdf.geometry.total_bounds
-    return (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+    b = _load_geo_payload()["bounds"]
+    return (b["minx"], b["miny"], b["maxx"], b["maxy"])

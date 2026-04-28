@@ -47,6 +47,10 @@ DEFAULT_SOFT_QUERY = (
     "quiet residential area suitable for boutique retail with good subway access"
 )
 DEFAULT_ALPHA_SEMANTIC = 0.8
+_VALIDATION_OUTPUT_DIRS = [
+    _REPO / "tests" / "outputs" / "validation" / "rank_stability_business_queries",
+    _REPO / "outputs" / "validation" / "rank_stability_business_queries",
+]
 
 # ── Page config ─────────────────────────────────────────────────────────────
 
@@ -352,6 +356,145 @@ def _density_label(col: str) -> str:
     return col.removeprefix("act_").removesuffix("_density").replace("_", " ").title()
 
 
+def _sanitize_query_slug(text: str) -> str:
+    out = "".join(ch.lower() if ch.isalnum() else "_" for ch in text).strip("_")
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out or "query"
+
+
+def _find_validation_output_dir() -> Path | None:
+    for path in _VALIDATION_OUTPUT_DIRS:
+        if (path / "query_rank_correlations.csv").is_file():
+            return path
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def _load_validation_summary(output_dir: str | Path) -> pd.DataFrame | None:
+    path = Path(output_dir) / "query_rank_correlations.csv"
+    if not path.is_file():
+        return None
+    df = pd.read_csv(path)
+    return df if not df.empty else None
+
+
+@st.cache_data(show_spinner=False)
+def _load_validation_detail(output_dir: str | Path, query_slug: str) -> pd.DataFrame | None:
+    path = Path(output_dir) / f"rank_compare_{query_slug}.csv"
+    if not path.is_file():
+        return None
+    df = pd.read_csv(path)
+    return df if not df.empty else None
+
+
+def _validation_metric_options(rank_df: pd.DataFrame) -> dict[str, str]:
+    options = {
+        "Rank 2022": "rank_2022",
+        "Rank 2024": "rank_2024",
+        "Rank Delta (2024 − 2022)": "rank_delta",
+        "Absolute Rank Delta": "rank_delta_abs",
+    }
+    return {label: col for label, col in options.items() if col in rank_df.columns}
+
+
+def _build_validation_map(
+    rank_df: pd.DataFrame,
+    *,
+    metric_col: str,
+    metric_label: str,
+) -> go.Figure | None:
+    if not CDTA_SHAPE_PATH.is_file():
+        return None
+
+    geo_gdf = load_cdta_gdf_for_map(CDTA_SHAPE_PATH)
+    shape_geojson = geo_gdf.__geo_interface__
+
+    map_df = rank_df.copy()
+    map_df[metric_col] = pd.to_numeric(map_df[metric_col], errors="coerce")
+    map_df["map_key"] = map_df["cd"].astype(str) + " | " + map_df["borough"].astype(str)
+    map_plot = map_df.dropna(subset=["map_key", metric_col, "cd", "borough"])
+    if map_plot.empty:
+        return None
+
+    zvals = map_plot[metric_col]
+    zmin = float(zvals.min())
+    zmax = float(zvals.max())
+    if zmax <= zmin:
+        zmax = zmin + 1e-9
+
+    if metric_col == "rank_delta":
+        bound = max(abs(zmin), abs(zmax))
+        zmin, zmax = -bound, bound
+        colorscale = [
+            [0.0, "#b2182b"],
+            [0.5, "#f7f7f7"],
+            [1.0, "#2166ac"],
+        ]
+        reversescale = False
+    elif metric_col in {"rank_2022", "rank_2024"}:
+        colorscale = [
+            [0.0, "#08306b"],
+            [0.5, "#4292c6"],
+            [1.0, "#deebf7"],
+        ]
+        reversescale = True
+    else:
+        colorscale = [
+            [0.0, "#fff5eb"],
+            [0.5, "#fdae6b"],
+            [1.0, "#a63603"],
+        ]
+        reversescale = False
+
+    bounds = geo_gdf.geometry.total_bounds
+    lon0 = float((bounds[0] + bounds[2]) / 2)
+    lat0 = float((bounds[1] + bounds[3]) / 2)
+
+    hover_parts = [
+        map_plot["neighborhood"].astype(str),
+        "<br>rank 2022 " + map_plot["rank_2022"].astype(str),
+        "<br>rank 2024 " + map_plot["rank_2024"].astype(str),
+    ]
+    if "rank_delta" in map_plot.columns:
+        hover_parts.append("<br>delta " + map_plot["rank_delta"].astype(str))
+    hover_text = hover_parts[0]
+    for part in hover_parts[1:]:
+        hover_text = hover_text + part
+
+    fig = go.Figure(
+        go.Choroplethmapbox(
+            geojson=shape_geojson,
+            locations=map_plot["map_key"],
+            z=map_plot[metric_col],
+            featureidkey="properties.map_key",
+            colorscale=colorscale,
+            zmin=zmin,
+            zmax=zmax,
+            reversescale=reversescale,
+            marker_opacity=0.82,
+            marker_line_width=0.6,
+            marker_line_color="#ffffff",
+            colorbar=dict(
+                title=dict(text=metric_label, side="right"),
+                tickformat=".1f",
+            ),
+            text=hover_text,
+            hovertemplate="<b>%{text}</b><br>selected value %{z:.1f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        height=500,
+        margin=dict(l=0, r=0, t=8, b=0),
+        mapbox=dict(
+            style="open-street-map",
+            center=dict(lat=lat0, lon=lon0),
+            zoom=9,
+        ),
+    )
+    return fig
+
+
 selected_density_col: str | None = None
 if _density_cols:
     selected_density_col = st.selectbox(
@@ -559,6 +702,88 @@ except Exception as e:
         "Run `python -m src.embeddings` to generate embeddings. Default: OpenAI when `OPENAI_API_KEY` is set, else local sentence-transformers; "
         "to force local-only vectors, set `EMBEDDING_BACKEND=sentence_transformers` in `.env` (see `.env.example`)."
     )
+
+# ── Validation choropleth (saved 2022 vs 2024 outputs) ───────────────────
+
+st.subheader("Validation Choropleth (2022 vs 2024)")
+st.caption(
+    "Saved rank-stability outputs for a fixed validation query. This map is independent of the live hard-filtered ranking above: "
+    "use it to compare 2022 rank, 2024 rank, and rank shifts across CDTAs."
+)
+
+validation_dir = _find_validation_output_dir()
+if validation_dir is None:
+    st.info(
+        "No validation outputs found. Run `python tests/rank_stability_validation_business_queries.py` from the repo root, "
+        "or run it from `tests/` with `--output-dir ../tests/outputs/validation/rank_stability_business_queries`."
+    )
+else:
+    validation_summary = _load_validation_summary(validation_dir)
+    if validation_summary is None:
+        st.info("Validation summary CSV is missing or empty.")
+    else:
+        query_options = validation_summary["query"].astype(str).tolist()
+        selected_validation_query = st.selectbox(
+            "Validation query",
+            options=query_options,
+            index=0,
+            help="Choose which saved validation query to map.",
+        )
+
+        query_slug = _sanitize_query_slug(selected_validation_query)
+        validation_detail = _load_validation_detail(validation_dir, query_slug)
+        if validation_detail is None:
+            st.warning(f"No rank comparison CSV found for query '{selected_validation_query}'.")
+        else:
+            metric_options = _validation_metric_options(validation_detail)
+            selected_metric_label = st.radio(
+                "Map view",
+                options=list(metric_options.keys()),
+                horizontal=True,
+            )
+            metric_col = metric_options[selected_metric_label]
+
+            summary_row = validation_summary.loc[
+                validation_summary["query"].astype(str) == selected_validation_query
+            ].head(1)
+            if not summary_row.empty:
+                row = summary_row.iloc[0]
+                st.markdown(
+                    f"**Spearman** {float(row['spearman_r']):.3f}  |  "
+                    f"**Kendall Tau** {float(row['kendall_tau']):.3f}  |  "
+                    f"**CDTA overlap** {int(row['n_cdta_overlap'])}"
+                )
+
+            validation_map_fig = _build_validation_map(
+                validation_detail,
+                metric_col=metric_col,
+                metric_label=selected_metric_label,
+            )
+            if validation_map_fig is None:
+                st.warning("Validation map could not be rendered because the shapefile or joined rows are missing.")
+            else:
+                st.plotly_chart(validation_map_fig, use_container_width=True)
+
+            if {"rank_2022", "rank_2024", "rank_delta", "rank_delta_abs"}.issubset(
+                validation_detail.columns
+            ):
+                movers_df = (
+                    validation_detail[
+                        [
+                            "neighborhood",
+                            "cd",
+                            "borough",
+                            "rank_2022",
+                            "rank_2024",
+                            "rank_delta",
+                            "rank_delta_abs",
+                        ]
+                    ]
+                    .sort_values("rank_delta_abs", ascending=False)
+                    .reset_index(drop=True)
+                )
+                st.markdown("**Largest Movers**")
+                st.dataframe(movers_df.head(15), use_container_width=True, hide_index=True)
 
 # ── Claude agent analysis ──────────────────────────────────────────────────
 

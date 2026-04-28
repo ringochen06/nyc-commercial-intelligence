@@ -86,6 +86,7 @@ def run_eval_pipeline(
         print("\nNo missing values in the final table.")
 
     print("\nPreview:")
+    print(final_df.columns.to_list())
     print(final_df.head())
 
 

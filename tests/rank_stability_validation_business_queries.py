@@ -12,6 +12,43 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.embeddings import build_all_profiles, cosine_similarity, embed_texts
+from src.ranking import combine_scores
+
+# Fixed, externally authored queries aligned to the sector vocabulary of the act_*_storefront
+# categories (food services, retail, health care, educational services, etc.) but phrased as
+# natural-language site-selection prompts rather than copying the column labels verbatim.
+# Broader framing reduces sensitivity to specific shop types while still exercising the
+# same semantic dimensions that the profile embeddings capture.
+DEFAULT_QUERIES: list[str] = [
+    # FOOD_SERVICES
+    "neighborhood with strong food services activity and high pedestrian volume",
+    # RETAIL
+    "dense retail corridor with diverse storefronts and walkable street-level activity",
+    # HEALTH_CARE_OR_SOCIAL_ASSISTANCE
+    "area with established health care or social assistance presence and residential demand",
+    # EDUCATIONAL_SERVICES
+    "neighborhood with significant educational services and families or students nearby",
+    # FINANCE_AND_INSURANCE
+    "commercial district with finance and insurance businesses and white-collar workforce",
+    # REAL_ESTATE
+    "area with active real estate market and mixed residential and commercial development",
+    # LEGAL_SERVICES
+    "district with professional legal services and proximity to civic institutions",
+    # ACCOUNTING_SERVICES
+    "business-dense neighborhood with accounting services and small-business concentration",
+    # MANUFACTURING
+    "industrial or light manufacturing zone with warehouse or production storefronts",
+    # WHOLESALE
+    "wholesale and distribution corridor with commercial loading and supply-chain access",
+    # INFORMATION_SERVICES
+    "tech or media cluster with information services firms and young professional residents",
+    # BROADCASTING_TELECOMM
+    "area with broadcasting or telecommunications infrastructure and commercial density",
+    # MOVIES_VIDEO_SOUND
+    "creative, medium-density neighborhood with film, video, or sound production activity",
+    # PUBLISHING
+    "mixed-use area with publishing or media businesses and educated residential base",
+]
 
 
 def _query_from_act_column(col: str) -> str:
@@ -56,15 +93,19 @@ def _build_query_ranks(
     *,
     query_label: str,
     key_cols: list[str],
+    alpha: float = 0.8,
 ) -> pd.DataFrame:
     q_vec = embed_texts([query])[0]
     sims = cosine_similarity(q_vec, embeddings)
+    act = df["commercial_activity_score"].to_numpy(dtype=float)
+    blended = combine_scores(sims, act, alpha=alpha)
     out = df[key_cols].copy()
     out[f"cosine_{query_label}"] = sims
+    out[f"blended_{query_label}"] = blended
     out[f"rank_{query_label}"] = (
-        out[f"cosine_{query_label}"]
+        pd.Series(blended, index=df.index)
         .rank(ascending=False, method="average")
-        .astype(float)
+        .to_numpy(dtype=float)
     )
     return out
 
@@ -103,7 +144,7 @@ def _scatter_plot(
             alpha=0.85,
         )
 
-    plt.title(f"Rank Stability (2022 vs 2024)\nQuery: {query}")
+    plt.title(f"Rank Stability (2022 vs 2024) — blended score\nQuery: {query}")
     plt.xlabel("Rank 2022 (1 = highest cosine)")
     plt.ylabel("Rank 2024 (1 = highest cosine)")
     plt.tight_layout()
@@ -117,6 +158,8 @@ def run_validation(
     features_2024: Path,
     output_dir: Path,
     queries: list[str] | None,
+    alpha: float = 0.8,
+    derive_queries: bool = False,
     clean_output: bool = False,
 ) -> pd.DataFrame:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -132,12 +175,19 @@ def run_validation(
     for col in key_cols:
         if col not in df22.columns or col not in df24.columns:
             raise ValueError(f"Missing key column '{col}' in one of the input files.")
+    for df, label in ((df22, "2022"), (df24, "2024")):
+        if "commercial_activity_score" not in df.columns:
+            raise ValueError(f"Missing 'commercial_activity_score' in {label} feature table.")
 
-    if queries is None or len(queries) == 0:
+    if queries:
+        queries = _dedupe_keep_order(queries)
+    elif derive_queries:
         queries = _derive_queries_from_act_columns(df22, df24)
         if not queries:
             raise ValueError("No common act_*_storefront columns found to derive queries.")
-    queries = _dedupe_keep_order(queries)
+        queries = _dedupe_keep_order(queries)
+    else:
+        queries = list(DEFAULT_QUERIES)
     if not queries:
         raise ValueError("No usable queries after de-duplication.")
 
@@ -153,6 +203,7 @@ def run_validation(
             query,
             query_label="2022",
             key_cols=key_cols,
+            alpha=alpha,
         )
         r24 = _build_query_ranks(
             df24,
@@ -160,6 +211,7 @@ def run_validation(
             query,
             query_label="2024",
             key_cols=key_cols,
+            alpha=alpha,
         )
 
         merged = r22.merge(r24, on=key_cols, how="inner")
@@ -208,13 +260,13 @@ def main() -> None:
     parser.add_argument(
         "--features-2022",
         type=Path,
-        default=Path("tests/data/neighborhood_features_final.csv"),
+        default=Path("./data/neighborhood_features_final.csv"),
         help="Path to 2022 feature table CSV.",
     )
     parser.add_argument(
         "--features-2024",
         type=Path,
-        default=Path("data/processed/neighborhood_features_final.csv"),
+        default=Path("../data/processed/neighborhood_features_final.csv"),
         help="Path to 2024 feature table CSV.",
     )
     parser.add_argument(
@@ -228,9 +280,22 @@ def main() -> None:
         nargs="*",
         default=None,
         help=(
-            "Optional override query list. If omitted, queries are auto-derived "
-            "from common act_*_storefront columns (prefix/suffix removed)."
+            "Optional explicit query list. Overrides both --derive-queries and DEFAULT_QUERIES."
         ),
+    )
+    parser.add_argument(
+        "--derive-queries",
+        action="store_true",
+        help=(
+            "Derive queries from common act_*_storefront column names instead of DEFAULT_QUERIES. "
+            "Note: this inflates correlations because the vocabulary mirrors the embedded profiles."
+        ),
+    )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.8,
+        help="Weight on semantic similarity (0–1); commercial activity weight = 1 − alpha.",
     )
     parser.add_argument(
         "--clean-output",
@@ -244,6 +309,8 @@ def main() -> None:
         features_2024=args.features_2024,
         output_dir=args.output_dir,
         queries=args.queries,
+        alpha=args.alpha,
+        derive_queries=args.derive_queries,
         clean_output=args.clean_output,
     )
 

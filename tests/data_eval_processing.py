@@ -1,13 +1,13 @@
 """
 data_eval_processing.py
 
-Generates ped_clean_test.csv and storefront_features_test.csv containing only
-data up to and including 2023. Run this script for evaluation snapshots capped at
-2023 without touching the main processed files used by the app.
+Generates evaluation snapshots with default year caps at 2022 and point-in-time
+pedestrian extracts for 2022 (tests) and 2024 (processed).
 
 Outputs:
-    data/processed/ped_clean_test.csv
-    data/processed/storefront_features_test.csv
+    tests/data/ped_clean_test.csv (point year == 2022 by default)
+    tests/data/storefront_features_test.csv (reporting year <= 2022 by default)
+    data/processed/ped_clean_2024.csv (point year == 2024 by default)
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ import pandas as pd
 from src.data_processing import clean_neighborhood_profiles, standardize_borough
 from src.feature_engineering import build_storefront_features, load_boundaries, spatial_join_points
 
-MAX_YEAR = 2023
+MAX_YEAR = 2022
+TEST_PED_YEAR = 2022
+PROCESSED_PED_YEAR = 2024
 
 
 def parse_reporting_year_max(s: str) -> int | None:
@@ -45,9 +47,16 @@ def parse_ped_col_year(col: str) -> int | None:
 
 def clean_pedestrian_data_eval(
     ped_raw_path: str | Path,
-    max_year: int = MAX_YEAR,
+    *,
+    year: int,
+    mode: str = "exact",
 ) -> pd.DataFrame:
-    """Clean pedestrian counts using only time-series columns from years <= max_year."""
+    """Clean pedestrian counts using either exact-year or capped-year columns.
+
+    mode:
+      - "exact": use only columns whose parsed year == year
+      - "upto": use only columns whose parsed year <= year
+    """
     df_ped = pd.read_csv(ped_raw_path)
 
     if "the_geom" in df_ped.columns:
@@ -65,9 +74,14 @@ def clean_pedestrian_data_eval(
     all_ped_cols = [
         col for col in df_ped.columns if "_AM" in col or "_PM" in col or "_MD" in col
     ]
-    ped_cols = [
-        col for col in all_ped_cols if (parse_ped_col_year(col) or 9999) <= max_year
-    ]
+    if mode == "exact":
+        ped_cols = [col for col in all_ped_cols if parse_ped_col_year(col) == year]
+    elif mode == "upto":
+        ped_cols = [
+            col for col in all_ped_cols if (parse_ped_col_year(col) or 9999) <= year
+        ]
+    else:
+        raise ValueError(f"Unsupported mode: {mode}. Use 'exact' or 'upto'.")
 
     if ped_cols:
         avg_ped = df_ped[ped_cols].mean(axis=1)
@@ -111,7 +125,8 @@ def clean_pedestrian_data_eval(
     df = df[(df["latitude"] != 0) & (df["longitude"] != 0)]
     df = df[df["avg_pedestrian"].fillna(0) > 0]
 
-    print(f"  Pedestrian columns used (year <= {max_year}): {len(ped_cols)} of {len(all_ped_cols)}")
+    mode_label = f"year == {year}" if mode == "exact" else f"year <= {year}"
+    print(f"  Pedestrian columns used ({mode_label}): {len(ped_cols)} of {len(all_ped_cols)}")
     if ped_cols:
         print(f"  Earliest: {ped_cols[0]}  Latest: {ped_cols[-1]}")
 
@@ -291,17 +306,36 @@ def run_eval_processing(
     boundary_path: str | Path = "../data/raw/nyc_boundaries/nycdta2020.shp",
     output_dir: str | Path = "tests/data",
     max_year: int = MAX_YEAR,
+    test_ped_year: int = TEST_PED_YEAR,
+    processed_ped_year: int = PROCESSED_PED_YEAR,
+    processed_output_dir: str | Path = "data/processed",
 ) -> None:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    processed_output_dir = Path(processed_output_dir)
+    processed_output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Generating eval snapshots capped at {max_year}...\n")
 
-    print("Step 1: pedestrian counts")
-    ped_df = clean_pedestrian_data_eval(ped_raw_path, max_year=max_year)
+    print("Step 1: pedestrian counts (tests point-in-time)")
+    ped_df = clean_pedestrian_data_eval(
+        ped_raw_path,
+        year=test_ped_year,
+        mode="exact",
+    )
     ped_out = output_dir / "ped_clean_test.csv"
     ped_df.to_csv(ped_out, index=False)
     print(f"  Written: {ped_out}  ({len(ped_df)} rows)\n")
+
+    print("Step 1b: pedestrian counts (processed point-in-time)")
+    ped_2024_df = clean_pedestrian_data_eval(
+        ped_raw_path,
+        year=processed_ped_year,
+        mode="exact",
+    )
+    ped_2024_out = processed_output_dir / f"ped_clean_{processed_ped_year}.csv"
+    ped_2024_df.to_csv(ped_2024_out, index=False)
+    print(f"  Written: {ped_2024_out}  ({len(ped_2024_df)} rows)\n")
 
     print("Step 2: storefront features")
     boundary_gdf = load_boundaries(boundary_path)

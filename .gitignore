@@ -24,4 +24,6 @@ data/raw/**
 outputs/**
 !outputs/**/
 !outputs/**/.gitkeep
+!outputs/validation/
+!outputs/validation/**
 claude.md

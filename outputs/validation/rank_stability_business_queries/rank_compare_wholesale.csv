@@ -1,0 +1,72 @@
+neighborhood,cd,borough,cosine_2022,rank_2022,cosine_2024,rank_2024,rank_delta,rank_delta_abs
+QN04 Elmhurst-Corona (CD 4 Approximation),QN04,QUEENS,0.17072502,21.0,0.16252995,36.0,15.0,15.0
+BK09 Crown Heights (South) (CD 9 Approximation),BK09,BROOKLYN,0.15918057,41.0,0.16660985,27.0,-14.0,14.0
+MN03 Lower East Side-Chinatown (CD 3 Equivalent),MN03,MANHATTAN,0.17151853,20.0,0.16482311,32.0,12.0,12.0
+MN04 Chelsea-Hell's Kitchen (CD 4 Approximation),MN04,MANHATTAN,0.14820203,51.0,0.15822397,41.0,-10.0,10.0
+MN10 Harlem (CD 10 Equivalent),MN10,MANHATTAN,0.15053013,46.0,0.14483014,55.0,9.0,9.0
+MN01 Financial District-Tribeca (CD 1 Equivalent),MN01,MANHATTAN,0.1629613,36.0,0.16655609,28.0,-8.0,8.0
+BX09 Soundview-Parkchester (CD 9 Approximation),BX09,BRONX,0.16589816,27.0,0.17045885,19.0,-8.0,8.0
+SI01 North Shore (CD 1 Equivalent),SI01,STATEN ISLAND,0.16101779,38.0,0.15284517,46.0,8.0,8.0
+QN10 South Ozone Park-Howard Beach (CD 10 Approximation),QN10,QUEENS,0.16513255,32.0,0.16728482,24.0,-8.0,8.0
+BX07 Fordham-Bedford Park-Norwood (CD 7 Approximation),BX07,BRONX,0.17170705,19.0,0.17548889,12.0,-7.0,7.0
+BX02 Longwood-Hunts Point (CD 2 Approximation),BX02,BRONX,0.1796277,10.0,0.17274469,17.0,7.0,7.0
+QN14 The Rockaways (CD 14 Approximation),QN14,QUEENS,0.16258007,37.0,0.15690136,43.0,6.0,6.0
+QN02 Long Island City-Sunnyside-Woodside (CD 2 Approximation),QN02,QUEENS,0.16562343,31.0,0.16189556,37.0,6.0,6.0
+BK10 Bay Ridge-Dyker Heights (CD 10 Approximation),BK10,BROOKLYN,0.16579059,28.0,0.16368844,34.0,6.0,6.0
+MN05 Midtown-Flatiron-Union Square (CD 5 Approximation),MN05,MANHATTAN,0.14902838,48.0,0.1456536,53.0,5.0,5.0
+BK17 East Flatbush (CD 17 Approximation),BK17,BROOKLYN,0.14423794,55.0,0.14841326,50.0,-5.0,5.0
+BK14 Flatbush-Midwood (CD 14 Approximation),BK14,BROOKLYN,0.14777264,52.0,0.15255468,47.0,-5.0,5.0
+QN13 Queens Village-Bellerose-Rosedale (CD 13 Approximation),QN13,QUEENS,0.17335549,16.0,0.16918966,21.0,5.0,5.0
+BK03 Bedford-Stuyvesant (CD 3 Approximation),BK03,BROOKLYN,0.1483897,50.0,0.15389627,45.0,-5.0,5.0
+BK05 East New York-Cypress Hills (CD 5 Approximation),BK05,BROOKLYN,0.14714827,53.0,0.15184392,48.0,-5.0,5.0
+QN05 Ridgewood-Maspeth-Middle Village (CD 5 Approximation),QN05,QUEENS,0.17413874,15.0,0.16923082,20.0,5.0,5.0
+BK16 Ocean Hill-Brownsville (CD 16 Approximation),BK16,BROOKLYN,0.16738224,25.0,0.16549851,30.0,5.0,5.0
+QN06 Forest Hills-Rego Park (CD 6 Approximation),QN06,QUEENS,0.15014577,47.0,0.14835106,51.0,4.0,4.0
+BK18 Canarsie-Flatlands (CD 18 Approximation),BK18,BROOKLYN,0.16509101,33.0,0.16573337,29.0,-4.0,4.0
+BK13 Coney Island-Brighton Beach (CD 13 Approximation),BK13,BROOKLYN,0.17015222,22.0,0.17176087,18.0,-4.0,4.0
+BK04 Bushwick (CD 4 Equivalent),BK04,BROOKLYN,0.18127114,8.0,0.18598896,4.0,-4.0,4.0
+BK08 Crown Heights (North) (CD 8 Approximation),BK08,BROOKLYN,0.1638141,35.0,0.16503587,31.0,-4.0,4.0
+MN07 Upper West Side (CD 7 Approximation),MN07,MANHATTAN,0.15144044,45.0,0.15159355,49.0,4.0,4.0
+QN03 Jackson Heights-East Elmhurst (CD 3 Approximation),QN03,QUEENS,0.17231798,17.0,0.17473528,13.0,-4.0,4.0
+BK02 Downtown Brooklyn-Fort Greene (CD 2 Approximation),BK02,BROOKLYN,0.1656749,30.0,0.16388571,33.0,3.0,3.0
+BX08 Riverdale-Kingsbridge-Marble Hill (CD 8 Approximation),BX08,BRONX,0.17733753,12.0,0.17989467,9.0,-3.0,3.0
+SI03 South Shore (CD 3 Approximation),SI03,STATEN ISLAND,0.14870918,49.0,0.14655074,52.0,3.0,3.0
+BX05 Morris Heights-Mount Hope (CD 5 Approximation),BX05,BRONX,0.16629717,26.0,0.16766281,23.0,-3.0,3.0
+QN09 Kew Gardens-Richmond Hill-Woodhaven (CD 9 Approximation),QN09,QUEENS,0.16577265,29.0,0.16669458,26.0,-3.0,3.0
+QN12 Jamaica-St. Albans-Hollis (CD 12 Approximation),QN12,QUEENS,0.15759012,43.0,0.15865108,40.0,-3.0,3.0
+BX11 Pelham Parkway-Morris Park (CD 11 Approximation),BX11,BRONX,0.16988477,23.0,0.16722785,25.0,2.0,2.0
+QN01 Astoria-Queensbridge (CD 1 Equivalent),QN01,QUEENS,0.17621845,13.0,0.17394379,15.0,2.0,2.0
+BK11 Bensonhurst-Bath Beach (CD 11 Approximation),BK11,BROOKLYN,0.17174911,18.0,0.1732626,16.0,-2.0,2.0
+MN12 Washington Heights-Inwood (CD 12 Equivalent),MN12,MANHATTAN,0.16901441,24.0,0.16833015,22.0,-2.0,2.0
+MN09 Morningside Heights-Hamilton Heights (CD 9 Equivalent),MN09,MANHATTAN,0.1268219,59.0,0.13807297,57.0,-2.0,2.0
+QN81 Flushing Meadows-Corona Park (JIA 81 Approximation),QN81,QUEENS,0.087328896,67.0,0.08548438,68.0,1.0,1.0
+QN08 Fresh Meadows-Hillcrest-Briarwood (CD 8 Approximation),QN08,QUEENS,0.16490583,34.0,0.16317128,35.0,1.0,1.0
+SI02 Mid-Island (CD 2 Approximation),SI02,STATEN ISLAND,0.12982985,58.0,0.13026863,59.0,1.0,1.0
+QN07 Flushing-Murray Hill-Whitestone (CD 7 Approximation),QN07,QUEENS,0.19689177,2.0,0.18974206,3.0,1.0,1.0
+BK01 Williamsburg-Greenpoint (CD 1 Equivalent),BK01,BROOKLYN,0.18168142,7.0,0.18029934,8.0,1.0,1.0
+SI95 Great Kills Park-Fort Wadsworth (JIA 95 Approximation),SI95,STATEN ISLAND,0.08698133,68.0,0.08714026,67.0,-1.0,1.0
+BK06 Park Slope-Carroll Gardens (CD 6 Approximation),BK06,BROOKLYN,0.1606882,39.0,0.15965705,38.0,-1.0,1.0
+MN06 East Midtown-Murray Hill (CD 6 Approximation),MN06,MANHATTAN,0.13532823,57.0,0.1336085,58.0,1.0,1.0
+MN02 Greenwich Village-SoHo (CD 2 Equivalent),MN02,MANHATTAN,0.18491942,6.0,0.18214637,7.0,1.0,1.0
+BK07 Sunset Park-Windsor Terrace (CD 7 Approximation),BK07,BROOKLYN,0.15981206,40.0,0.1596365,39.0,-1.0,1.0
+BX27 Bronx Park (JIA 27 Approximation),BX27,BRONX,0.11519336,62.0,0.11542052,63.0,1.0,1.0
+BK56 Jamaica Bay (West) (JIA 56 Approximation),BK56,BROOKLYN,0.107276216,63.0,0.11847245,62.0,-1.0,1.0
+BX01 Melrose-Mott Haven-Port Morris (CD 1 Approximation),BX01,BRONX,0.18078266,9.0,0.17933647,10.0,1.0,1.0
+BX10 Co-op City-Throgs Neck (CD 10 Approximation),BX10,BRONX,0.18647811,4.0,0.18306628,5.0,1.0,1.0
+BX06 Tremont-Belmont-West Farms (CD 6 Approximation),BX06,BRONX,0.18500634,5.0,0.1829227,6.0,1.0,1.0
+BX04 Highbridge-Concourse (CD 4 Approximation),BX04,BRONX,0.18935256,3.0,0.1911268,2.0,-1.0,1.0
+QN82 Forest Park (JIA 82 Approximation),QN82,QUEENS,0.079217836,70.0,0.07726464,70.0,0.0,0.0
+QN84 Jamaica Bay (East) (JIA 84 Approximation),QN84,QUEENS,0.09437089,66.0,0.09477784,66.0,0.0,0.0
+QN83 JFK International Airport (JIA 83 Approximation),QN83,QUEENS,0.10415825,64.0,0.10062745,64.0,0.0,0.0
+QN80 LaGuardia Airport (JIA 80 Approximation),QN80,QUEENS,0.08408135,69.0,0.08378644,69.0,0.0,0.0
+BK12 Borough Park-Kensington (CD 12 Approximation),BK12,BROOKLYN,0.14647943,54.0,0.14548033,54.0,0.0,0.0
+BK15 Sheepshead Bay-Gravesend (East) (CD 15 Approximation),BK15,BROOKLYN,0.17589696,14.0,0.1739442,14.0,0.0,0.0
+MN11 East Harlem (CD 11 Equivalent),MN11,MANHATTAN,0.15600058,44.0,0.15405351,44.0,0.0,0.0
+BK55 Prospect Park (JIA 55 Approximation),BK55,BROOKLYN,0.09566567,65.0,0.09631706,65.0,0.0,0.0
+MN08 Upper East Side-Roosevelt Island (CD 8 Equivalent),MN08,MANHATTAN,0.14258297,56.0,0.14253289,56.0,0.0,0.0
+BX03 Morrisania-Crotona Park East (CD 3 Approximation),BX03,BRONX,0.15785672,42.0,0.1574765,42.0,0.0,0.0
+BX12 Wakefield-Williamsbridge-Eastchester (CD 12 Approximation),BX12,BRONX,0.21281102,1.0,0.20488523,1.0,0.0,0.0
+BX26 Van Cortlandt Park (JIA 26 Equivalent),BX26,BRONX,0.12599273,60.0,0.12767118,60.0,0.0,0.0
+BX28 Pelham Bay Park (JIA 28 Approximation),BX28,BRONX,0.12473847,61.0,0.123072565,61.0,0.0,0.0
+MN64 Central Park (JIA 64 Equivalent),MN64,MANHATTAN,0.05872827,71.0,0.058986343,71.0,0.0,0.0
+QN11 Auburndale-Bayside-Douglaston (CD 11 Approximation),QN11,QUEENS,0.17921036,11.0,0.17667538,11.0,0.0,0.0

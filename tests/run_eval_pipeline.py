@@ -32,7 +32,7 @@ def run_eval_pipeline(
     boundary_path: str | Path = _RAW / "nyc_boundaries" / "nycdta2020.shp",
     subway_path: str | Path = _PROCESSED / "subway_clean.csv",
     output_dir: str | Path = _TESTS_DATA,
-    max_year: int = 2023,
+    max_year: int = 2022,
 ) -> None:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

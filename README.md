@@ -185,3 +185,51 @@ Includes **`tests/test_kmeans.py`** and **`tests/test_feature_engineering.py`**.
 - Large datasets are not included in the repository.
 - Precomputed embeddings live under `outputs/embeddings/` after running `python -m src.embeddings` (`neighborhood_embeddings.npy` for OpenAI backend, `neighborhood_embeddings_st.npy` for sentence-transformers; `neighborhood_texts.npy` is shared).
 - OpenAI **429 / insufficient_quota** means the account billing or quota for that API key is exhausted; fix billing in the OpenAI dashboard, then re-run embeddings.
+
+---
+
+## Deploying as a web app (Railway + Vercel)
+
+The repo also ships as a two-tier web app: **FastAPI on Railway** (Python pipeline + ML) and **Next.js on Vercel** (UI). The Streamlit app remains supported for local use; the FastAPI backend wraps the same `src/` modules.
+
+### 1. Backend on Railway
+
+1. **`api/main.py`** is the FastAPI app — endpoints `/api/health`, `/api/feature-ranges`, `/api/cluster`, `/api/rank`, `/api/agent`, `/api/geo/cdta`. Run locally:
+   ```bash
+   uv pip install -r requirements.txt
+   uvicorn api.main:app --reload --port 8000
+   ```
+2. **Push to GitHub**, then on [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway auto-detects Python via `requirements.txt`, `runtime.txt` (Python 3.11), and `railway.json` / `Procfile` (start command, healthcheck path).
+3. **Set environment variables** on the Railway service (Settings → Variables):
+   - `FRONTEND_ORIGINS` — comma-separated list of Vercel URLs that may call the API (e.g. `https://nyc-commercial.vercel.app`). Without this, only `http://localhost:3000` is allowed.
+   - `OPENAI_API_KEY` — required if you don't pre-build embeddings; otherwise set `EMBEDDING_BACKEND=sentence_transformers` and the server downloads `all-MiniLM-L6-v2` on first call.
+   - `ANTHROPIC_API_KEY` — optional, only for the `/api/agent` endpoint.
+4. **Memory:** sentence-transformers + torch + geopandas needs the **Hobby plan** (8 GB) — the free tier (512 MB) will OOM. If you stay free-tier, use OpenAI embeddings only and pre-cache them under `outputs/embeddings/` so the server never loads `sentence-transformers`.
+5. **Embeddings cache:** the simplest path is to commit `outputs/embeddings/neighborhood_embeddings*.npy` and `neighborhood_texts.npy` to git so they ship with the deploy. Alternative: pull from your `ringoch/nyc-commercial-data` HF dataset on startup.
+
+### 2. Frontend on Vercel
+
+The frontend is a stand-alone Next.js 14 (App Router, TypeScript, Tailwind) app under **`frontend/`**.
+
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local      # set NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+npm run dev                            # http://localhost:3000
+```
+
+To deploy:
+
+1. On [vercel.com](https://vercel.com) → **Add New Project → Import Git Repository**, point at this repo.
+2. **Set the Root Directory to `frontend/`** in project settings (otherwise Vercel will try to build from the repo root and fail on the Python files).
+3. Add the env var **`NEXT_PUBLIC_API_URL`** = `https://<your-railway-app>.up.railway.app` (no trailing slash).
+4. Vercel auto-detects Next.js and uses `npm run build`. Pushes to `main` deploy to production; PR branches get preview URLs.
+
+Once deployed, copy the production Vercel URL back into Railway's `FRONTEND_ORIGINS` so CORS allows it.
+
+### Deploy gotchas
+
+- **Cold starts:** Railway sleeps idle services on Hobby. First request takes 5–15s to wake. The frontend handles this with loading states; for demos, hit `/api/health` from a cron.
+- **CDTA shapefile** (`data/raw/nyc_boundaries/nycdta2020.shp`) is committed (~1.5 MB) and ships with the Railway build, so the choropleth maps work without an external download.
+- **The clustering "Run Analysis" call recomputes K-means on every request.** For the 71-CDTA dataset this is sub-second; if you swap in a larger feature table, add server-side caching keyed on `(features, max_k, vintage, boroughs)`.
+- The Streamlit app (`app.py`) and the FastAPI app share the same `src/` modules — keep both working when you change `src/`.

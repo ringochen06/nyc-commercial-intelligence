@@ -6,6 +6,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!frontend/.env.local.example
 .envrc
 *.py[cod]
 .pytest_cache/
@@ -27,3 +28,12 @@ outputs/**
 !outputs/validation/
 !outputs/validation/**
 claude.md
+
+# Frontend (Next.js / Vercel)
+frontend/node_modules
+frontend/.next
+frontend/out
+frontend/.vercel
+frontend/.env.local
+frontend/.env.*.local
+frontend/*.tsbuildinfo

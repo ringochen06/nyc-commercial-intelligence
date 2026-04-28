@@ -9,6 +9,11 @@ matplotlib>=3.7
 plotly>=5.0
 h5py>=3.0
 
+# FastAPI backend (Railway deploy)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.0
+
 # Supervised models (K-means is custom in src/kmeans_numpy.py)
 scikit-learn>=1.3
 

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-Vintage = Literal["present", "past"]
+Vintage = Literal["present"]
 
 
 class ClusterRequest(BaseModel):
@@ -54,19 +54,22 @@ class ClusterResponse(BaseModel):
 class HardFilters(BaseModel):
     boroughs: list[str] | None = None
     min_subway_stations: int | None = None
-    min_avg_pedestrian: int | None = None
+    min_avg_pedestrian: float | None = None
     min_storefront_density: float | None = None
     min_storefront_filings: int | None = None
     min_commercial_activity: float | None = None
+    max_competitive_score: float | None = None
+    max_shooting_incident_count: float | None = None
     min_nfh_goal4: float | None = None
     min_nfh_overall: float | None = None
 
 
 class RankRequest(BaseModel):
     query: str = Field("quiet residential area suitable for boutique retail with good subway access")
-    alpha: float = Field(0.8, ge=0.0, le=1.0, description="Semantic weight; commercial weight = 1 - alpha.")
+    alpha: float = Field(0.8, ge=0.0, le=1.0, description="Semantic weight; competitive weight = 1 - alpha.")
     filters: HardFilters = HardFilters()
     vintage: Vintage = "present"
+    competitive_source: str = "__overall__"
     cluster_assignments: dict[str, int] | None = None
     cluster_briefs: dict[str, str] | None = None
 
@@ -78,7 +81,7 @@ class RankRow(BaseModel):
     borough: str | None = None
     map_key: str | None = None
     semantic_similarity: float
-    commercial_activity_score: float
+    specific_competitive_score: float
     blended_score: float
     cluster: int | None = None
     cluster_description: str | None = None

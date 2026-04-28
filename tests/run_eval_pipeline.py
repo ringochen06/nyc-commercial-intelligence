@@ -68,6 +68,9 @@ def run_eval_pipeline(
         area_df=area_df,
         ped_feat=ped_feat,
         subway_feat=subway_feat,
+        shooting_feat=area_df.assign(shooting_incident_count_2024=0)[
+            ["neighborhood", "cd", "borough", "shooting_incident_count_2024"]
+        ],
         nbhd_clean=nbhd,
         storefront_feat=storefront_feat,
     )

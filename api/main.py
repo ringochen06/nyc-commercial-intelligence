@@ -57,7 +57,6 @@ from src.embeddings import (  # noqa: E402
     embed_texts,
 )
 from src.feature_engineering import (  # noqa: E402
-    is_act_density_column,
     is_act_storefront_column,
 )
 from src.kmeans_numpy import (  # noqa: E402
@@ -167,6 +166,8 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
         "storefront_density_per_km2",
         "storefront_filing_count",
         "commercial_activity_score",
+        "competitive_score",
+        "shooting_incident_count_2024",
         "transit_activity_score",
         "category_entropy",
         "category_diversity",
@@ -196,7 +197,7 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
         has_nfh_goal4=has_nfh_goal4,
         has_nfh_overall=has_nfh_overall,
         activity_columns=sorted(c for c in df.columns if is_act_storefront_column(c)),
-        density_columns=sorted(c for c in df.columns if is_act_density_column(c)),
+        density_columns=[],
     )
 
 
@@ -310,7 +311,7 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
         params.append(int(filters.min_subway_stations))
     if filters.min_avg_pedestrian is not None:
         where.append("avg_pedestrian >= ?")
-        params.append(int(filters.min_avg_pedestrian))
+        params.append(float(filters.min_avg_pedestrian))
     if filters.min_storefront_density is not None:
         where.append("storefront_density_per_km2 >= ?")
         params.append(float(filters.min_storefront_density))
@@ -320,6 +321,12 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
     if filters.min_commercial_activity is not None:
         where.append("commercial_activity_score >= ?")
         params.append(float(filters.min_commercial_activity))
+    if filters.max_competitive_score is not None:
+        where.append("competitive_score <= ?")
+        params.append(float(filters.max_competitive_score))
+    if filters.max_shooting_incident_count is not None:
+        where.append("shooting_incident_count_2024 <= ?")
+        params.append(float(filters.max_shooting_incident_count))
     if filters.min_nfh_goal4 is not None:
         where.append("nfh_goal4_fin_shocks_score >= ?")
         params.append(float(filters.min_nfh_goal4))
@@ -367,15 +374,35 @@ def rank(req: RankRequest) -> RankResponse:
     query_embedding = embed_texts([req.query])[0]
     sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
-    act_scores = np.array(
+    source_col = req.competitive_source
+    if source_col == "__overall__":
+        source_col = "storefront_filing_count"
+    elif not is_act_storefront_column(source_col):
+        raise HTTPException(
+            400,
+            "Invalid competitive_source. Use '__overall__' or an act_*_storefront column.",
+        )
+    if source_col not in df_filtered.columns:
+        raise HTTPException(400, f"Column {source_col} missing from filtered data.")
+
+    counts = np.array(
         [
-            float(df_filtered.loc[df_filtered["neighborhood"] == n, "commercial_activity_score"].iloc[0])
+            float(df_filtered.loc[df_filtered["neighborhood"] == n, source_col].iloc[0])
             for n in keep_names
         ],
         dtype=float,
     )
+    ped_scores = np.array(
+        [
+            float(df_filtered.loc[df_filtered["neighborhood"] == n, "avg_pedestrian"].iloc[0])
+            for n in keep_names
+        ],
+        dtype=float,
+    )
+    act_scores = np.log1p(np.maximum(counts / (ped_scores + 1.0), 0.0))
 
-    X = np.column_stack([sim_scores.astype(float), act_scores])
+    # Higher competition should lower rank, so use the negated competition signal.
+    X = np.column_stack([sim_scores.astype(float), -act_scores])
     if X.shape[0] == 1:
         scaled = np.ones((1, 2)) * 0.5
     else:
@@ -402,7 +429,7 @@ def rank(req: RankRequest) -> RankResponse:
                 borough=str(borough) if pd.notna(borough) else None,
                 map_key=f"{cd} | {borough}" if pd.notna(cd) and pd.notna(borough) else None,
                 semantic_similarity=float(sim_scores[idx]),
-                commercial_activity_score=float(act_scores[idx]),
+                specific_competitive_score=float(act_scores[idx]),
                 blended_score=float(final_scores[idx]),
                 cluster=int(cluster_id) if cluster_id is not None else None,
                 cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,

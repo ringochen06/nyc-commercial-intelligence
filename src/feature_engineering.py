@@ -30,23 +30,6 @@ def safe_divide(a: pd.Series, b: pd.Series) -> pd.Series:
     return a / b.replace(0, np.nan)
 
 
-def simplify_category(cat: str) -> str:
-    cat = str(cat).lower()
-
-    if any(
-        k in cat
-        for k in ["pizza", "restaurant", "chinese", "italian", "mexican", "coffee"]
-    ):
-        return "food"
-    elif any(
-        k in cat
-        for k in ["electronics", "tobacco", "store", "shop", "dealer", "retail"]
-    ):
-        return "retail"
-    else:
-        return "other"
-
-
 def entropy_from_counts(values: np.ndarray) -> float:
     values = values.astype(float)
     total = values.sum()
@@ -217,6 +200,41 @@ def build_subway_features(subway_joined: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================================================
+# NYPD shooting incidents (points → CDTA aggregates)
+# =========================================================
+
+
+def build_shooting_features(shooting_joined: pd.DataFrame) -> pd.DataFrame:
+    keys = ["neighborhood", "cd", "borough"]
+    id_col = "incident_key" if "incident_key" in shooting_joined.columns else None
+    feat = (
+        shooting_joined.groupby(keys, dropna=False)
+        .agg(
+            shooting_incident_count_2024=(
+                (id_col, "nunique") if id_col else ("latitude", "count")
+            ),
+        )
+        .reset_index()
+    )
+    return feat
+
+
+def build_shooting_neighborhood_features(
+    shooting_feat: pd.DataFrame, area_df: pd.DataFrame
+) -> pd.DataFrame:
+    out = area_df[["neighborhood", "cd", "borough", "area_km2"]].merge(
+        shooting_feat, on=["neighborhood", "cd", "borough"], how="left"
+    )
+    out["shooting_incident_count_2024"] = pd.to_numeric(
+        out["shooting_incident_count_2024"], errors="coerce"
+    ).fillna(0)
+    out["shooting_density_per_km2"] = safe_divide(
+        out["shooting_incident_count_2024"], out["area_km2"]
+    ).fillna(0)
+    return out
+
+
+# =========================================================
 # Storefront filings (points → CDTA aggregates by business activity)
 # =========================================================
 
@@ -241,7 +259,7 @@ def storefront_activity_column_name(activity: str) -> str:
     label = str(activity).strip()
     if not label:
         return "act_UNKNOWN_storefront"
-    if label == "other":
+    if label.lower() == "other":
         return "act_other_storefront"
     t = label.upper().replace("&", "AND").replace("/", "_")
     t = re.sub(r"[^A-Z0-9]+", "_", t)
@@ -258,13 +276,13 @@ def build_storefront_features(storefront_joined: pd.DataFrame) -> pd.DataFrame:
     if cat_col not in df.columns:
         df[cat_col] = "UNKNOWN"
 
-    totals = df.groupby(keys, dropna=False).size().reset_index(name="storefront_filing_count")
-
-    counts = (
-        df.groupby(keys + [cat_col], dropna=False)
+    totals = (
+        df.groupby(keys, dropna=False)
         .size()
-        .reset_index(name="_n")
+        .reset_index(name="storefront_filing_count")
     )
+
+    counts = df.groupby(keys + [cat_col], dropna=False).size().reset_index(name="_n")
     counts["_feat_col"] = counts[cat_col].map(storefront_activity_column_name)
     wide = counts.pivot_table(
         index=keys,
@@ -291,12 +309,13 @@ def merge_all_features(
     area_df: pd.DataFrame,
     ped_feat: pd.DataFrame,
     subway_feat: pd.DataFrame,
+    shooting_feat: pd.DataFrame,
     nbhd_clean: pd.DataFrame,
     storefront_feat: pd.DataFrame,
 ) -> pd.DataFrame:
     # Use CDTA-based spatial features as the master table (storefront replaces license/inspection POI).
     df = area_df.copy()
-    for other in (ped_feat, subway_feat, storefront_feat):
+    for other in (ped_feat, subway_feat, shooting_feat, storefront_feat):
         df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
 
     # Neighborhood profile (MOCEJ / Planning-style CSV + optional NFH), keyed by CD ~ CDTA2020.
@@ -354,9 +373,7 @@ def merge_all_features(
     if act_cols:
         mat = df[act_cols].to_numpy(dtype=float)
         df["category_diversity"] = (mat > 0).sum(axis=1)
-        df["category_entropy"] = [
-            entropy_from_counts(row.astype(float)) for row in mat
-        ]
+        df["category_entropy"] = [entropy_from_counts(row.astype(float)) for row in mat]
     else:
         df["category_diversity"] = 0
         df["category_entropy"] = 0.0
@@ -364,8 +381,10 @@ def merge_all_features(
     # business activity density: share of total filings per category (zero-safe)
     if "storefront_filing_count" in df.columns and act_cols:
         for col in act_cols:
-            density_col = col[:-len("_storefront")] + "_density"
-            df[density_col] = safe_divide(df[col], df["storefront_filing_count"]).fillna(0)
+            density_col = col[: -len("_storefront")] + "_density"
+            df[density_col] = safe_divide(
+                df[col], df["storefront_filing_count"]
+            ).fillna(0)
 
     # density features
     if "area_km2" in df.columns:
@@ -388,6 +407,10 @@ def merge_all_features(
     for col in ["subway_station_count"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
+    if "shooting_incident_count_2024" in df.columns:
+        df["shooting_incident_count_2024"] = pd.to_numeric(
+            df["shooting_incident_count_2024"], errors="coerce"
+        ).fillna(0)
 
     # Pedestrian: avoid a single citywide mean for all missing CDTAs (that collapses values).
     for col in ["avg_pedestrian", "peak_pedestrian"]:
@@ -408,16 +431,20 @@ def merge_all_features(
     if {"avg_pedestrian", "storefront_filing_count"}.issubset(df.columns):
         raw_comm = df["avg_pedestrian"] * df["storefront_filing_count"]
         df["commercial_activity_score"] = np.log1p(np.maximum(raw_comm, 0))
-        print(f"Computed commercial_activity_score: {df['commercial_activity_score'].describe()}")
-    
+        print(
+            f"Computed commercial_activity_score: {df['commercial_activity_score'].describe()}"
+        )
+        raw_competitive = df["storefront_filing_count"] / (df["avg_pedestrian"] + 1.0)
+        df["competitive_score"] = np.log1p(np.maximum(raw_competitive, 0))
+        print(f"Computed competitive_score: {df['competitive_score'].describe()}")
+
     if {"subway_station_count", "avg_pedestrian"}.issubset(df.columns):
         raw_trans = df["subway_station_count"] * df["avg_pedestrian"]
         df["transit_activity_score"] = np.log1p(np.maximum(raw_trans, 0))
 
-    _drop_final = [
-        "median_household_income",  # use nfh_median_income in downstream / embeddings
-    ]
-    df = df.drop(columns=[c for c in _drop_final if c in df.columns], errors="ignore")
+    # Keep MOCEJ income as fallback when NFH income is unavailable.
+    if "nfh_median_income" in df.columns and "median_household_income" in df.columns:
+        df = df.drop(columns=["median_household_income"], errors="ignore")
     _nfh_ranks = [
         c for c in df.columns if str(c).startswith("nfh_") and str(c).endswith("_rank")
     ]
@@ -460,6 +487,7 @@ def run_feature_engineering(
     nbhd_clean_path: str | Path,
     boundary_path: str | Path,
     storefront_raw_path: str | Path | None = None,
+    shooting_raw_path: str | Path | None = None,
     output_dir: str | Path = "data/processed",
 ) -> dict[str, pd.DataFrame]:
     output_dir = Path(output_dir)
@@ -479,6 +507,13 @@ def run_feature_engineering(
 
     ped_joined = spatial_join_points(ped, boundary_gdf)
     subway_joined = spatial_join_points(subway, boundary_gdf)
+    if shooting_raw_path is not None and Path(shooting_raw_path).exists():
+        shooting_raw = pd.read_csv(shooting_raw_path, low_memory=False)
+        shooting_joined = spatial_join_points(shooting_raw, boundary_gdf)
+        shooting_feat = build_shooting_features(shooting_joined)
+    else:
+        shooting_feat = area_df[["neighborhood", "cd", "borough"]].copy()
+        shooting_feat["shooting_incident_count_2024"] = 0
 
     if storefront_raw_path is not None and Path(storefront_raw_path).exists():
         sf_clean = clean_storefront_data(storefront_raw_path)
@@ -494,10 +529,15 @@ def run_feature_engineering(
         area_df=area_df,
         ped_feat=ped_feat,
         subway_feat=subway_feat,
+        shooting_feat=shooting_feat,
         nbhd_clean=nbhd,
         storefront_feat=storefront_feat,
     )
 
+    shooting_neighborhood_feat = build_shooting_neighborhood_features(
+        shooting_feat, area_df
+    )
+    shooting_neighborhood_feat.to_csv(output_dir / "shooting_features.csv", index=False)
     storefront_feat.to_csv(output_dir / "storefront_features.csv", index=False)
     final_df.to_csv(output_dir / "neighborhood_features_final.csv", index=False)
 
@@ -506,6 +546,7 @@ def run_feature_engineering(
         "subway_joined": subway_joined,
         "ped_features": ped_feat,
         "subway_features": subway_feat,
+        "shooting_features": shooting_neighborhood_feat,
         "storefront_features": storefront_feat,
         "neighborhood_features": final_df,
     }

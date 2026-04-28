@@ -2,7 +2,7 @@
 NYC Commercial Intelligence — Streamlit dashboard.
 
 Hard constraints  : sidebar controls → DuckDB SQL filters (deterministic)
-Soft ranking      : α·semantic + β·commercial_activity
+Soft ranking      : α·semantic + β·(negative competitive penalty)
                     (MinMax-scaled to [0,1] on the filtered set; β = 1 − α from one slider)
 Semantic search   : embedding cosine similarity on neighborhood profiles (OpenAI or sentence-transformers)
 Optional Claude   : read-only SQL on filtered data
@@ -39,18 +39,13 @@ from config import (  # noqa: E402
     CDTA_SHAPE_PATH,
     load_cdta_gdf_for_map,
     load_neighborhood_features,
-    load_neighborhood_test_features,
 )
-from feature_engineering import is_act_density_column, is_act_storefront_column  # noqa: E402
+from feature_engineering import is_act_storefront_column  # noqa: E402
 
 DEFAULT_SOFT_QUERY = (
     "quiet residential area suitable for boutique retail with good subway access"
 )
 DEFAULT_ALPHA_SEMANTIC = 0.8
-_VALIDATION_OUTPUT_DIRS = [
-    _REPO / "tests" / "outputs" / "validation" / "rank_stability_business_queries",
-    _REPO / "outputs" / "validation" / "rank_stability_business_queries",
-]
 
 # ── Page config ─────────────────────────────────────────────────────────────
 
@@ -62,23 +57,14 @@ st.set_page_config(
 
 st.title("Ranking")
 st.caption(
-    "Hard filters (DuckDB SQL), then α·semantic + β·commercial activity "
+    "Hard filters (DuckDB SQL), then α·semantic + β·competitive score "
     "(MinMax on the filtered set). Optional Claude. "
     "**Cluster** columns appear when you have run **K-Selection Analysis** on the home page."
 )
 
 # ── Load data ───────────────────────────────────────────────────────────────
 
-_data_choice = st.sidebar.radio(
-    "Data vintage",
-    options=["Present", "Past"],
-    index=0,
-    help=(
-        "**Present** — `data/processed/neighborhood_features_final.csv` (latest pipeline run).\n\n"
-        "**Past** — `tests/data/neighborhood_features_final.csv` (historical snapshot used for testing)."
-    ),
-)
-df_full = load_neighborhood_features() if _data_choice == "Present" else load_neighborhood_test_features()
+df_full = load_neighborhood_features()
 
 # ── Sidebar: Hard Filters ──────────────────────────────────────────────────
 
@@ -143,8 +129,12 @@ poi_threshold = st.sidebar.slider(
 )
 
 # Commercial activity score (log1p scale — step must be << range or Streamlit slider breaks)
-comm_min = float(pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").min())
-comm_max = float(pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").max())
+comm_min = float(
+    pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").min()
+)
+comm_max = float(
+    pd.to_numeric(df_full["commercial_activity_score"], errors="coerce").max()
+)
 if not np.isfinite(comm_min):
     comm_min = 0.0
 if not np.isfinite(comm_max):
@@ -160,6 +150,42 @@ comm_threshold = st.sidebar.slider(
     value=comm_min,
     step=comm_step,
     help="Minimum commercial activity score: log1p(storefront filings × avg pedestrian).",
+)
+
+# Competitive score upper bound (higher is worse; keep below this cap)
+comp_min = float(pd.to_numeric(df_full["competitive_score"], errors="coerce").min())
+comp_max = float(pd.to_numeric(df_full["competitive_score"], errors="coerce").max())
+if not np.isfinite(comp_min):
+    comp_min = 0.0
+if not np.isfinite(comp_max):
+    comp_max = 1.0
+if comp_max <= comp_min:
+    comp_max = comp_min + 1e-3
+comp_span = comp_max - comp_min
+comp_step = max(0.001, min(0.5, round(comp_span / 200.0, 6)))
+comp_max_threshold = st.sidebar.slider(
+    "Max competitive score",
+    min_value=comp_min,
+    max_value=comp_max,
+    value=comp_max,
+    step=comp_step,
+    help="Upper bound on competition pressure: log1p(storefront filings / (avg pedestrian + 1)).",
+)
+
+# Crime upper bound
+crime_min = float(
+    pd.to_numeric(df_full["shooting_incident_count_2024"], errors="coerce").min()
+)
+crime_max = float(
+    pd.to_numeric(df_full["shooting_incident_count_2024"], errors="coerce").max()
+)
+crime_max_threshold = st.sidebar.slider(
+    "Max shooting incident count (2024)",
+    min_value=crime_min,
+    max_value=crime_max,
+    value=crime_max,
+    step=1.0,
+    help="Upper bound on total NYPD shooting incidents (2024) per neighborhood.",
 )
 
 # NFH minimums (same style as other hard filters; only shown when columns exist)
@@ -213,6 +239,8 @@ def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
           AND storefront_density_per_km2 >= {density_threshold}
           AND storefront_filing_count >= {poi_threshold}
           AND commercial_activity_score >= {comm_threshold}
+          AND competitive_score <= {comp_max_threshold}
+          AND shooting_incident_count_2024 <= {crime_max_threshold}
           {"AND nfh_goal4_fin_shocks_score >= " + str(float(nfh_goal4_threshold)) if nfh_goal4_threshold is not None else ""}
           {"AND nfh_overall_score >= " + str(float(nfh_overall_threshold)) if nfh_overall_threshold is not None else ""}
         ORDER BY commercial_activity_score DESC
@@ -239,6 +267,8 @@ with st.expander("View generated SQL", expanded=False):
         f"  AND storefront_density_per_km2 >= {density_threshold}\n"
         f"  AND storefront_filing_count >= {poi_threshold}\n"
         f"  AND commercial_activity_score >= {comm_threshold}\n"
+        f"  AND competitive_score <= {comp_max_threshold}\n"
+        f"  AND shooting_incident_count_2024 <= {crime_max_threshold}\n"
         f"{'  AND nfh_goal4_fin_shocks_score >= ' + str(float(nfh_goal4_threshold)) + chr(10) if nfh_goal4_threshold is not None else ''}"
         f"{'  AND nfh_overall_score >= ' + str(float(nfh_overall_threshold)) + chr(10) if nfh_overall_threshold is not None else ''}"
         f"ORDER BY commercial_activity_score DESC;",
@@ -266,7 +296,9 @@ display_cols.extend(
         "subway_station_count",
         "avg_pedestrian",
         "storefront_density_per_km2",
+        "shooting_incident_count_2024",
         "commercial_activity_score",
+        "competitive_score",
         "transit_activity_score",
     ]
 )
@@ -339,178 +371,56 @@ alpha = st.sidebar.slider(
     1.0,
     DEFAULT_ALPHA_SEMANTIC,
     0.05,
-    help="Weight on embedding cosine similarity; β = 1 − α goes to commercial_activity_score.",
+    help="Weight on embedding cosine similarity; β = 1 − α goes to competitive_score.",
 )
 beta = 1.0 - alpha
 _w = np.array([alpha, beta], dtype=float)
 st.sidebar.caption(
-    f"\u03b2 — commercial activity = 1 − \u03b1 → \u03b1={alpha:.3f}, \u03b2={beta:.3f}"
+    f"\u03b2 — competitive score = 1 − \u03b1 → \u03b1={alpha:.3f}, \u03b2={beta:.3f}"
 )
 
-# ── Business activity density column selector ───────────────────────────────
+# ── Competitive score source selector ───────────────────────────────────────
 
-_density_cols = sorted(c for c in df_full.columns if is_act_density_column(c))
-
-
-def _density_label(col: str) -> str:
-    return col.removeprefix("act_").removesuffix("_density").replace("_", " ").title()
+_activity_count_cols = sorted(c for c in df_full.columns if is_act_storefront_column(c))
 
 
-def _sanitize_query_slug(text: str) -> str:
-    out = "".join(ch.lower() if ch.isalnum() else "_" for ch in text).strip("_")
-    while "__" in out:
-        out = out.replace("__", "_")
-    return out or "query"
-
-
-def _find_validation_output_dir() -> Path | None:
-    for path in _VALIDATION_OUTPUT_DIRS:
-        if (path / "query_rank_correlations.csv").is_file():
-            return path
-    return None
-
-
-@st.cache_data(show_spinner=False)
-def _load_validation_summary(output_dir: str | Path) -> pd.DataFrame | None:
-    path = Path(output_dir) / "query_rank_correlations.csv"
-    if not path.is_file():
-        return None
-    df = pd.read_csv(path)
-    return df if not df.empty else None
-
-
-@st.cache_data(show_spinner=False)
-def _load_validation_detail(output_dir: str | Path, query_slug: str) -> pd.DataFrame | None:
-    path = Path(output_dir) / f"rank_compare_{query_slug}.csv"
-    if not path.is_file():
-        return None
-    df = pd.read_csv(path)
-    return df if not df.empty else None
-
-
-def _validation_metric_options(rank_df: pd.DataFrame) -> dict[str, str]:
-    options = {
-        "Rank 2022": "rank_2022",
-        "Rank 2024": "rank_2024",
-        "Rank Delta (2024 − 2022)": "rank_delta",
-        "Absolute Rank Delta": "rank_delta_abs",
-    }
-    return {label: col for label, col in options.items() if col in rank_df.columns}
-
-
-def _build_validation_map(
-    rank_df: pd.DataFrame,
-    *,
-    metric_col: str,
-    metric_label: str,
-) -> go.Figure | None:
-    if not CDTA_SHAPE_PATH.is_file():
-        return None
-
-    geo_gdf = load_cdta_gdf_for_map(CDTA_SHAPE_PATH)
-    shape_geojson = geo_gdf.__geo_interface__
-
-    map_df = rank_df.copy()
-    map_df[metric_col] = pd.to_numeric(map_df[metric_col], errors="coerce")
-    map_df["map_key"] = map_df["cd"].astype(str) + " | " + map_df["borough"].astype(str)
-    map_plot = map_df.dropna(subset=["map_key", metric_col, "cd", "borough"])
-    if map_plot.empty:
-        return None
-
-    zvals = map_plot[metric_col]
-    zmin = float(zvals.min())
-    zmax = float(zvals.max())
-    if zmax <= zmin:
-        zmax = zmin + 1e-9
-
-    if metric_col == "rank_delta":
-        bound = max(abs(zmin), abs(zmax))
-        zmin, zmax = -bound, bound
-        colorscale = [
-            [0.0, "#b2182b"],
-            [0.5, "#f7f7f7"],
-            [1.0, "#2166ac"],
-        ]
-        reversescale = False
-    elif metric_col in {"rank_2022", "rank_2024"}:
-        colorscale = [
-            [0.0, "#08306b"],
-            [0.5, "#4292c6"],
-            [1.0, "#deebf7"],
-        ]
-        reversescale = True
-    else:
-        colorscale = [
-            [0.0, "#fff5eb"],
-            [0.5, "#fdae6b"],
-            [1.0, "#a63603"],
-        ]
-        reversescale = False
-
-    bounds = geo_gdf.geometry.total_bounds
-    lon0 = float((bounds[0] + bounds[2]) / 2)
-    lat0 = float((bounds[1] + bounds[3]) / 2)
-
-    hover_parts = [
-        map_plot["neighborhood"].astype(str),
-        "<br>rank 2022 " + map_plot["rank_2022"].astype(str),
-        "<br>rank 2024 " + map_plot["rank_2024"].astype(str),
-    ]
-    if "rank_delta" in map_plot.columns:
-        hover_parts.append("<br>delta " + map_plot["rank_delta"].astype(str))
-    hover_text = hover_parts[0]
-    for part in hover_parts[1:]:
-        hover_text = hover_text + part
-
-    fig = go.Figure(
-        go.Choroplethmapbox(
-            geojson=shape_geojson,
-            locations=map_plot["map_key"],
-            z=map_plot[metric_col],
-            featureidkey="properties.map_key",
-            colorscale=colorscale,
-            zmin=zmin,
-            zmax=zmax,
-            reversescale=reversescale,
-            marker_opacity=0.82,
-            marker_line_width=0.6,
-            marker_line_color="#ffffff",
-            colorbar=dict(
-                title=dict(text=metric_label, side="right"),
-                tickformat=".1f",
-            ),
-            text=hover_text,
-            hovertemplate="<b>%{text}</b><br>selected value %{z:.1f}<extra></extra>",
-        )
+def _activity_label(col: str) -> str:
+    return (
+        col.removeprefix("act_").removesuffix("_storefront").replace("_", " ").title()
     )
-    fig.update_layout(
-        height=500,
-        margin=dict(l=0, r=0, t=8, b=0),
-        mapbox=dict(
-            style="open-street-map",
-            center=dict(lat=lat0, lon=lon0),
-            zoom=9,
-        ),
-    )
-    return fig
 
 
-selected_density_col: str | None = None
-if _density_cols:
-    selected_density_col = st.selectbox(
-        "Business activity for density column in ranking table",
-        options=_density_cols,
-        format_func=_density_label,
-    )
+_competitive_source_options: list[str] = ["__overall__"] + _activity_count_cols
+
+
+def _competitive_source_label(source: str) -> str:
+    if source == "__overall__":
+        return "Overall (all storefront filings)"
+    return _activity_label(source)
+
+
+selected_competitive_source = st.selectbox(
+    "Competitive score source",
+    options=_competitive_source_options,
+    format_func=_competitive_source_label,
+    help=(
+        "Choose which storefront count to use in competitive_score. "
+        "Formula: log1p(count / (avg_pedestrian + 1))."
+    ),
+)
 
 # ── Soft ranking: semantic + commercial activity ────────────────────────────
 
-st.subheader("Soft ranking (α·semantic + β·commercial activity)")
+st.subheader("Soft ranking (α·semantic + β·competitive score)")
 st.caption(
     "Semantic similarity uses the **submitted** text from the sidebar (after **Update soft ranking**). "
     "Changing α still updates the blend immediately. "
     "**Cluster** / **Cluster description** use the latest **K-Selection Analysis** on the home page "
     "(same session). Neighborhoods not in that run show empty cluster cells."
+)
+st.caption(
+    f"Current competitive source: **{_competitive_source_label(selected_competitive_source)}** "
+    "(computed as `log1p(count / (avg_pedestrian + 1))` on filtered rows)."
 )
 
 
@@ -533,24 +443,40 @@ try:
         sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
         keep_names = [n for n in filtered_neighborhoods if n in idx_map]
-        if "commercial_activity_score" not in df_filtered.columns:
-            raise KeyError(
-                "Column commercial_activity_score missing from feature table."
-            )
+        if "competitive_score" not in df_filtered.columns:
+            raise KeyError("Column competitive_score missing from feature table.")
 
-        act_scores = np.array(
+        comp_scores = np.array(
             [
                 float(
                     df_filtered.loc[
-                        df_filtered["neighborhood"] == n, "commercial_activity_score"
+                        df_filtered["neighborhood"] == n,
+                        (
+                            "storefront_filing_count"
+                            if selected_competitive_source == "__overall__"
+                            else selected_competitive_source
+                        ),
                     ].iloc[0]
                 )
                 for n in keep_names
             ],
             dtype=float,
         )
+        ped_scores = np.array(
+            [
+                float(
+                    df_filtered.loc[
+                        df_filtered["neighborhood"] == n, "avg_pedestrian"
+                    ].iloc[0]
+                )
+                for n in keep_names
+            ],
+            dtype=float,
+        )
+        comp_scores = np.log1p(np.maximum(comp_scores / (ped_scores + 1.0), 0.0))
 
-        X = np.column_stack([sim_scores.astype(float), act_scores])
+        # Higher competition should hurt ranking, so blend with the negated signal.
+        X = np.column_stack([sim_scores.astype(float), -comp_scores])
         if X.shape[0] == 1:
             scores_scaled = np.ones((1, 2)) * 0.5
         else:
@@ -563,23 +489,13 @@ try:
                 {
                     "neighborhood": keep_names,
                     "semantic_similarity": sim_scores.round(4),
-                    "commercial_activity_score": act_scores.round(3),
+                    "specific_competitive_score": comp_scores.round(3),
                     "blended_score": final_scores.round(4),
                 }
             )
             .sort_values("blended_score", ascending=False)
             .reset_index(drop=True)
         )
-
-        _density_col_label: str | None = None
-        if selected_density_col and selected_density_col in df_filtered.columns:
-            _density_col_label = (
-                f"present {_density_label(selected_density_col).lower()} density"
-            )
-            _density_merge = df_filtered[["neighborhood", selected_density_col]].rename(
-                columns={selected_density_col: _density_col_label}
-            )
-            ranking_df = ranking_df.merge(_density_merge, on="neighborhood", how="left")
 
         ranking_df.index = ranking_df.index + 1
         ranking_df.index.name = "rank"
@@ -603,11 +519,9 @@ try:
                 "cluster",
                 "cluster_description",
                 "semantic_similarity",
-                "commercial_activity_score",
+                "specific_competitive_score",
                 "blended_score",
             ]
-            if _density_col_label and _density_col_label in rk.columns:
-                show_cols.append(_density_col_label)
             ranking_df = rk[show_cols].set_index("rank")
         else:
             st.caption(
@@ -703,88 +617,6 @@ except Exception as e:
         "to force local-only vectors, set `EMBEDDING_BACKEND=sentence_transformers` in `.env` (see `.env.example`)."
     )
 
-# ── Validation choropleth (saved 2022 vs 2024 outputs) ───────────────────
-
-st.subheader("Validation Choropleth (2022 vs 2024)")
-st.caption(
-    "Saved rank-stability outputs for a fixed validation query. This map is independent of the live hard-filtered ranking above: "
-    "use it to compare 2022 rank, 2024 rank, and rank shifts across CDTAs."
-)
-
-validation_dir = _find_validation_output_dir()
-if validation_dir is None:
-    st.info(
-        "No validation outputs found. Run `python tests/rank_stability_validation_business_queries.py` from the repo root, "
-        "or run it from `tests/` with `--output-dir ../tests/outputs/validation/rank_stability_business_queries`."
-    )
-else:
-    validation_summary = _load_validation_summary(validation_dir)
-    if validation_summary is None:
-        st.info("Validation summary CSV is missing or empty.")
-    else:
-        query_options = validation_summary["query"].astype(str).tolist()
-        selected_validation_query = st.selectbox(
-            "Validation query",
-            options=query_options,
-            index=0,
-            help="Choose which saved validation query to map.",
-        )
-
-        query_slug = _sanitize_query_slug(selected_validation_query)
-        validation_detail = _load_validation_detail(validation_dir, query_slug)
-        if validation_detail is None:
-            st.warning(f"No rank comparison CSV found for query '{selected_validation_query}'.")
-        else:
-            metric_options = _validation_metric_options(validation_detail)
-            selected_metric_label = st.radio(
-                "Map view",
-                options=list(metric_options.keys()),
-                horizontal=True,
-            )
-            metric_col = metric_options[selected_metric_label]
-
-            summary_row = validation_summary.loc[
-                validation_summary["query"].astype(str) == selected_validation_query
-            ].head(1)
-            if not summary_row.empty:
-                row = summary_row.iloc[0]
-                st.markdown(
-                    f"**Spearman** {float(row['spearman_r']):.3f}  |  "
-                    f"**Kendall Tau** {float(row['kendall_tau']):.3f}  |  "
-                    f"**CDTA overlap** {int(row['n_cdta_overlap'])}"
-                )
-
-            validation_map_fig = _build_validation_map(
-                validation_detail,
-                metric_col=metric_col,
-                metric_label=selected_metric_label,
-            )
-            if validation_map_fig is None:
-                st.warning("Validation map could not be rendered because the shapefile or joined rows are missing.")
-            else:
-                st.plotly_chart(validation_map_fig, use_container_width=True)
-
-            if {"rank_2022", "rank_2024", "rank_delta", "rank_delta_abs"}.issubset(
-                validation_detail.columns
-            ):
-                movers_df = (
-                    validation_detail[
-                        [
-                            "neighborhood",
-                            "cd",
-                            "borough",
-                            "rank_2022",
-                            "rank_2024",
-                            "rank_delta",
-                            "rank_delta_abs",
-                        ]
-                    ]
-                    .sort_values("rank_delta_abs", ascending=False)
-                    .reset_index(drop=True)
-                )
-                st.markdown("**Largest Movers**")
-                st.dataframe(movers_df.head(15), use_container_width=True, hide_index=True)
-
 # ── Claude agent analysis ──────────────────────────────────────────────────
 
 st.subheader("AI analysis (Claude)")
@@ -824,6 +656,8 @@ with col1:
         "| `storefront_density_per_km2` | float | Storefront filings per km\u00b2 |\n"
         "| `storefront_filing_count` | int | Non-vacant storefront filings (CDTA) |\n"
         "| `commercial_activity_score` | float | `log1p`(storefront filings \u00d7 avg pedestrian) |\n"
+        "| `competitive_score` | float | `log1p`(storefront filings / (avg pedestrian + 1)); used as a **max** hard-filter cap |\n"
+        "| `shooting_incident_count_2024` | float | Total shooting incidents (2024); used as a **max** hard-filter cap |\n"
         "| `nfh_goal4_fin_shocks_score` | float | NFH Goal 4 (financial shocks) index (when column exists) |\n"
         "| `nfh_overall_score` | float | NFH overall index (when column exists) |\n"
         "| `act_*_storefront` | int | **Not** in the default `WHERE`; available in `SELECT *` and the table above. Add thresholds in SQL if you need category-specific hard filters. |"
@@ -859,11 +693,11 @@ with col2:
         "| `nfh_median_income` | NFH median income (when column exists) |\n"
         "| `pct_bachelors_plus` | Share with bachelor's degree or higher |\n"
         "| `commute_public_transit` | Public transit commute share |\n"
-        "| `commercial_activity_score` | Activity level (log-scaled product) |\n"
+        "| `competitive_score` | Competition pressure (log-scaled storefronts per pedestrian) |\n"
         "| `transit_activity_score` | Transit activity (log-scaled product) |\n"
         "| `nfh_overall_score` | NFH overall financial-health composite |\n"
         "| `nfh_goal4_fin_shocks_score` | NFH Goal 4 financial-shock resilience |\n"
-        "| *Blended* | MinMax([semantic, commercial_activity]) on filtered rows, then α·semantic + (1−α)·activity (Ranking only; not embedded) |"
+        "| *Blended* | MinMax([semantic, -competitive_score]) on filtered rows, then α·semantic + (1−α)·competitive-penalty (Ranking only; not embedded) |"
     )
 
 st.caption(
@@ -873,6 +707,6 @@ st.caption(
 
 st.markdown(
     "**Pipeline**: Hard filters \u2192 DuckDB SQL \u2192 MinMaxScaler on "
-    "[cosine semantic, commercial_activity_score] \u2192 "
+    "[cosine semantic, -competitive_score] \u2192 "
     "α·col0 + β·col1 (β = 1 − α) \u2192 optional Claude SQL analysis."
 )

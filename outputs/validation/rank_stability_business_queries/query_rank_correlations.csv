@@ -1,18 +1,15 @@
 query,n_cdta_overlap,spearman_r,kendall_tau
-information services,71,0.9808182427900738,0.8937625754527164
-finance and insurance,71,0.9806841046277665,0.8929577464788734
-health care or social assistance,71,0.9805499664654594,0.8865191146881289
-legal services,71,0.9779342723004693,0.8873239436619719
-broadcasting telecomm,71,0.9765928906773976,0.8736418511066399
-educational services,71,0.9752850435949025,0.8768611670020122
-no business activity identified,71,0.974245472837022,0.8736418511066399
-wholesale,71,0.9730046948356806,0.8776659959758553
-real estate,71,0.9714285714285713,0.8816901408450706
-unknown,71,0.9653923541247484,0.8551307847082495
-accounting services,71,0.9651911468812876,0.862374245472837
-manufacturing,71,0.9551978537894031,0.8438631790744469
-retail,71,0.9548960429242118,0.8398390342052314
-publishing,71,0.9515090543259557,0.818913480885312
-other,71,0.948356807511737,0.8148893360160966
-movies video sound,71,0.9473172367538564,0.8317907444668009
-food services,71,0.9088866532528502,0.7690140845070423
+mixed-use area with publishing or media businesses and educated residential base,71,0.9867538564721663,0.9122736418511067
+district with professional legal services and proximity to civic institutions,71,0.9845405767940979,0.9074446680080483
+area with active real estate market and mixed residential and commercial development,71,0.9844064386317907,0.9074446680080483
+neighborhood with significant educational services and families or students nearby,71,0.9824279007377597,0.9018108651911471
+tech or media cluster with information services firms and young professional residents,71,0.979946344735077,0.8913480885311873
+business-dense neighborhood with accounting services and small-business concentration,71,0.9787391012743125,0.8953722334004025
+area with established health care or social assistance presence and residential demand,71,0.9776659959758551,0.8816901408450706
+"creative, medium-density neighborhood with film, video, or sound production activity",71,0.975553319919517,0.8857142857142858
+commercial district with finance and insurance businesses and white-collar workforce,71,0.973306505700872,0.8784708249496983
+industrial or light manufacturing zone with warehouse or production storefronts,71,0.9703554661301139,0.8792756539235413
+area with broadcasting or telecommunications infrastructure and commercial density,71,0.9703219315895371,0.8680080482897385
+dense retail corridor with diverse storefronts and walkable street-level activity,71,0.9690476190476189,0.8736418511066399
+neighborhood with strong food services activity and high pedestrian volume,71,0.9684104627766599,0.8688128772635816
+wholesale and distribution corridor with commercial loading and supply-chain access,71,0.9505030181086519,0.833400402414487

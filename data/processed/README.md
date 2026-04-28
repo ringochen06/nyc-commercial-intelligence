@@ -8,7 +8,8 @@ This folder contains cleaned and engineered datasets prepared for downstream ana
 
 ### `ped_clean.csv`
 
-Cleaned point-level pedestrian count dataset.
+Cleaned point-level pedestrian count dataset using only 2024 pedestrian columns
+from the raw bi-annual export.
 
 **Main fields**
 
@@ -165,7 +166,7 @@ Each CDTA row is turned into one English paragraph (`build_text_profile`), then 
 
 **Example `act_*_storefront` column names** (one row per activity bucket in a typical Open Data export; yours may differ):
 
-`act_ACCOUNTING_SERVICES_storefront`, `act_BROADCASTING_TELECOMM_storefront`, `act_EDUCATIONAL_SERVICES_storefront`, `act_FINANCE_AND_INSURANCE_storefront`, `act_FOOD_SERVICES_storefront`, `act_HEALTH_CARE_OR_SOCIAL_ASSISTANCE_storefront`, `act_INFORMATION_SERVICES_storefront`, `act_LEGAL_SERVICES_storefront`, `act_MANUFACTURING_storefront`, `act_MOVIES_VIDEO_SOUND_storefront`, `act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront`, `act_OTHER_storefront`, `act_PUBLISHING_storefront`, `act_REAL_ESTATE_storefront`, `act_RETAIL_storefront`, `act_UNKNOWN_storefront`, `act_WHOLESALE_storefront`, `act_other_storefront`
+`act_ACCOUNTING_SERVICES_storefront`, `act_BROADCASTING_TELECOMM_storefront`, `act_EDUCATIONAL_SERVICES_storefront`, `act_FINANCE_AND_INSURANCE_storefront`, `act_FOOD_SERVICES_storefront`, `act_HEALTH_CARE_OR_SOCIAL_ASSISTANCE_storefront`, `act_INFORMATION_SERVICES_storefront`, `act_LEGAL_SERVICES_storefront`, `act_MANUFACTURING_storefront`, `act_MOVIES_VIDEO_SOUND_storefront`, `act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront`, `act_PUBLISHING_storefront`, `act_REAL_ESTATE_storefront`, `act_RETAIL_storefront`, `act_UNKNOWN_storefront`, `act_WHOLESALE_storefront`, `act_other_storefront`
 
 The **Ranking** page table and “Soft / embedded columns” reference list these dynamically from `neighborhood_features_final.csv`.
 

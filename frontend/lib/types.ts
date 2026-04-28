@@ -1,6 +1,6 @@
 // Mirrors api/schemas.py. Keep in sync.
 
-export type Vintage = "present" | "past";
+export type Vintage = "present";
 
 export interface FeatureRange {
   min: number;
@@ -56,6 +56,8 @@ export interface HardFilters {
   min_storefront_density?: number;
   min_storefront_filings?: number;
   min_commercial_activity?: number;
+  max_competitive_score?: number;
+  max_shooting_incident_count?: number;
   min_nfh_goal4?: number;
   min_nfh_overall?: number;
 }
@@ -65,6 +67,7 @@ export interface RankRequest {
   alpha: number;
   filters: HardFilters;
   vintage: Vintage;
+  competitive_source?: string;
   cluster_assignments?: Record<string, number>;
   cluster_briefs?: Record<string, string>;
 }
@@ -76,7 +79,7 @@ export interface RankRow {
   borough: string | null;
   map_key: string | null;
   semantic_similarity: number;
-  commercial_activity_score: number;
+  specific_competitive_score: number;
   blended_score: number;
   cluster: number | null;
   cluster_description: string | null;

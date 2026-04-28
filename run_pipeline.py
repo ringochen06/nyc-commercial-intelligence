@@ -23,6 +23,7 @@ outputs = run_feature_engineering(
     nbhd_clean_path="data/processed/nbhd_clean.csv",
     boundary_path="data/raw/nyc_boundaries/nycdta2020.shp",
     storefront_raw_path="data/raw/Storefronts_Reported_Vacant_or_Not_20260424.csv",
+    shooting_raw_path="data/raw/NYPD Shooting Incident Data2024.csv",
     output_dir="data/processed",
 )
 print("storefront_features columns:", outputs["storefront_features"].columns.tolist())

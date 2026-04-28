@@ -8,7 +8,6 @@ import type {
   CdtaGeoResponse,
   ClusterResponse,
   FeatureRangesResponse,
-  Vintage,
 } from "@/lib/types";
 import { MultiSelect } from "@/components/MultiSelect";
 import { PlotlyChart } from "@/components/PlotlyChart";
@@ -20,7 +19,7 @@ const CANDIDATE_FEATURES = [
   "avg_pedestrian",
   "subway_station_count",
   "storefront_density_per_km2",
-  "commercial_activity_score",
+  "competitive_score",
   "transit_activity_score",
   "category_entropy",
   "category_diversity",
@@ -33,13 +32,12 @@ const DEFAULT_FEATURES = [
   "avg_pedestrian",
   "subway_station_count",
   "storefront_density_per_km2",
-  "commercial_activity_score",
+  "competitive_score",
   "transit_activity_score",
   "category_entropy",
 ];
 
 export default function KSelectionPage() {
-  const [vintage, setVintage] = useState<Vintage>("present");
   const [ranges, setRanges] = useState<FeatureRangesResponse | null>(null);
   const [boroughs, setBoroughs] = useState<string[]>([]);
   const [features, setFeatures] = useState<string[]>(DEFAULT_FEATURES);
@@ -56,13 +54,13 @@ export default function KSelectionPage() {
   // Initial load: feature ranges + geo
   useEffect(() => {
     api
-      .featureRanges(vintage)
+      .featureRanges()
       .then((r) => {
         setRanges(r);
         setBoroughs(r.boroughs);
       })
       .catch((e) => setError(e.message));
-  }, [vintage]);
+  }, []);
 
   useEffect(() => {
     api.cdtaGeo().then(setGeo).catch(() => {});
@@ -76,7 +74,7 @@ export default function KSelectionPage() {
         features,
         boroughs,
         max_k: maxK,
-        vintage,
+        vintage: "present",
       });
       setResult(r);
       // Persist for the Ranking page.
@@ -302,26 +300,6 @@ export default function KSelectionPage() {
       <SectionCard title="Settings">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-4">
-            <div>
-              <div className="text-sm font-medium mb-1">Data vintage</div>
-              <div className="flex gap-2">
-                {(["present", "past"] as Vintage[]).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setVintage(v)}
-                    className={
-                      "text-xs px-3 py-1 rounded border " +
-                      (vintage === v
-                        ? "bg-ink text-white border-ink"
-                        : "bg-white text-ink border-slate-300")
-                    }
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {ranges && (
               <MultiSelect
                 label="Borough"

@@ -32,8 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResponse>("/api/health"),
-  featureRanges: (vintage: Vintage = "present") =>
-    request<FeatureRangesResponse>(`/api/feature-ranges?vintage=${vintage}`),
+  featureRanges: () => request<FeatureRangesResponse>("/api/feature-ranges?vintage=present"),
   cdtaGeo: () => request<CdtaGeoResponse>("/api/geo/cdta"),
   cluster: (body: {
     features: string[];

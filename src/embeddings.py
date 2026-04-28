@@ -49,7 +49,7 @@ _st_model = None
 
 
 def _backend_env_raw() -> str:
-    return os.getenv("EMBEDDING_BACKEND", "openai").strip().lower()
+    return os.getenv("EMBEDDING_BACKEND", "auto").strip().lower()
 
 
 def resolve_embedding_backend() -> str:
@@ -131,7 +131,15 @@ def build_text_profile(row: pd.Series) -> str:
     pct_bach = row.get("pct_bachelors_plus")
     commute_pt = row.get("commute_public_transit")
     commercial = round(float(row.get("commercial_activity_score", 0)), 0)
+    competitive = round(float(row.get("competitive_score", 0)), 2)
     transit = round(float(row.get("transit_activity_score", 0)), 0)
+    shooting_incidents = int(float(row.get("shooting_incident_count_2024", 0) or 0))
+    construction_jobs = int(float(row.get("construction_jobs", 0) or 0))
+    manufacturing_jobs = int(float(row.get("manufacturing_jobs", 0) or 0))
+    wholesale_jobs = int(float(row.get("wholesale_jobs", 0) or 0))
+    total_jobs = int(float(row.get("total_jobs", 0) or 0))
+    food_services = int(float(row.get("food_services", 0) or 0))
+    total_businesses = int(float(row.get("total_businesses", 0) or 0))
     nfh_overall = row.get("nfh_overall_score")
     nfh_shocks = row.get("nfh_goal4_fin_shocks_score")
     pop_b = row.get("pop_black")
@@ -239,7 +247,10 @@ def build_text_profile(row: pd.Series) -> str:
         f"Activity mix diversity is {diversity} (entropy {entropy}). "
         f"{foot_traffic} foot traffic (avg {ped} pedestrians). "
         f"{subway} subway stations nearby. "
-        f"Commercial activity score {commercial}, transit activity score {transit}."
+        f"Commercial activity score {commercial}, competitive score {competitive}, transit activity score {transit}."
+        f" 2024 shooting incident count {shooting_incidents}."
+        f" Employment composition (counts): construction {construction_jobs}, manufacturing {manufacturing_jobs}, wholesale {wholesale_jobs}, total jobs {total_jobs}."
+        f" Business stock proxies: food services {food_services}, total businesses {total_businesses}."
         f"{soc_txt}{comm_txt}"
         f"{pop_demog_txt}"
         f"{sf_txt}"

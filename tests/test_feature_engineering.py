@@ -1,28 +1,25 @@
-"""Tests for POI ``simplify_category`` in ``src.feature_engineering`` (keyword-based on license text)."""
+"""Tests for storefront activity column normalization helpers."""
 
-from src.feature_engineering import simplify_category
-
-
-def test_unknown_is_other():
-    print("\n[TEST] test_unknown_is_other: Testing that 'unknown' category simplifies to 'other'")
-    assert simplify_category("unknown") == "other"
+from src.feature_engineering import storefront_activity_column_name
 
 
-def test_grocery_store_is_retail():
-    print("\n[TEST] test_grocery_store_is_retail: Testing that 'grocery store' category simplifies to 'retail'")
-    assert simplify_category("grocery store industry text") == "retail"
+def test_other_upper_maps_to_lower_other():
+    assert storefront_activity_column_name("OTHER") == "act_other_storefront"
 
 
-def test_electronics_store_is_retail():
-    print("\n[TEST] test_electronics_store_is_retail: Testing that 'electronics store' category simplifies to 'retail'")
-    assert simplify_category("electronics store") == "retail"
+def test_whitespace_and_case_normalization():
+    assert (
+        storefront_activity_column_name("  food services  ")
+        == "act_FOOD_SERVICES_storefront"
+    )
 
 
-def test_coffee_shop_is_food():
-    print("\n[TEST] test_coffee_shop_is_food: Testing that 'coffee shop' category simplifies to 'food'")
-    assert simplify_category("coffee shop") == "food"
+def test_slashes_and_dashes_are_normalized():
+    assert (
+        storefront_activity_column_name("HEALTH CARE / SOCIAL-ASSISTANCE")
+        == "act_HEALTH_CARE_SOCIAL_ASSISTANCE_storefront"
+    )
 
 
-def test_restaurant_keyword_is_food():
-    print("\n[TEST] test_restaurant_keyword_is_food: Testing that 'italian restaurant' category simplifies to 'food'")
-    assert simplify_category("italian restaurant") == "food"
+def test_empty_activity_falls_back_to_unknown():
+    assert storefront_activity_column_name("") == "act_UNKNOWN_storefront"

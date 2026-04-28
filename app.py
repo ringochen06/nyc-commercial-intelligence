@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from src.config import load_neighborhood_test_features
 import streamlit as st
 from plotly.subplots import make_subplots
 from sklearn.metrics import silhouette_score as sklearn_silhouette_score
@@ -42,7 +41,7 @@ CANDIDATE_FEATURES: list[str] = [
     "avg_pedestrian",
     "subway_station_count",
     "storefront_density_per_km2",
-    "commercial_activity_score",
+    "competitive_score",
     "transit_activity_score",
     "category_entropy",
     "category_diversity",
@@ -55,7 +54,7 @@ DEFAULT_FEATURES: list[str] = [
     "avg_pedestrian",
     "subway_station_count",
     "storefront_density_per_km2",
-    "commercial_activity_score",
+    "competitive_score",
     "transit_activity_score",
     "category_entropy",
 ]
@@ -77,8 +76,7 @@ st.caption(
 # ── Load data ────────────────────────────────────────────────────────────────
 
 
-# df_full = load_neighborhood_features()
-df_full = load_neighborhood_test_features()
+df_full = load_neighborhood_features()
 
 # ── Sidebar controls ─────────────────────────────────────────────────────────
 

@@ -15,13 +15,12 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_PROCESSED = REPO_ROOT / "data" / "processed"
 NEIGHBORHOOD_FEATURES_CSV = DATA_PROCESSED / "neighborhood_features_final.csv"
-NEIGHBORHOOD_TEST_FEATURES_CSV = REPO_ROOT / "tests" / "data" / "neighborhood_features_final.csv"
 CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
 
 
 @lru_cache(maxsize=2)
 def load_features(vintage: str = "present") -> pd.DataFrame:
-    path = NEIGHBORHOOD_FEATURES_CSV if vintage == "present" else NEIGHBORHOOD_TEST_FEATURES_CSV
+    path = NEIGHBORHOOD_FEATURES_CSV
     if not path.is_file():
         raise FileNotFoundError(f"Feature CSV not found at {path}. Run the pipeline or include the file in the deployment.")
     return pd.read_csv(path)

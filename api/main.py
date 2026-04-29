@@ -410,6 +410,8 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
             if req.filters.max_shooting_incident_count is not None
             else None
         ),
+        "min_nfh_goal4_score": req.filters.min_nfh_goal4,
+        "min_nfh_overall_score": req.filters.min_nfh_overall,
         "match_count": 200,
     }
     resp = client.rpc("match_neighborhoods", rpc_args).execute()

@@ -620,31 +620,81 @@ def rank(req: RankRequest) -> RankResponse:
     return RankResponse(rows=rows, n_total=len(df_full), n_filtered=len(df_filtered), sql=sql)
 
 
+def _top5_markdown(rank_resp: RankResponse) -> str:
+    """Render the top 5 ranked rows as a markdown table for Claude's prompt."""
+    header = (
+        "| # | neighborhood | semantic_similarity | specific_competitive_score | blended_score |\n"
+        "|---|---|---|---|---|\n"
+    )
+    body = "\n".join(
+        f"| {row.rank} | {row.neighborhood} | {row.semantic_similarity:.4f} | "
+        f"{row.specific_competitive_score:.4f} | {row.blended_score:.4f} |"
+        for row in rank_resp.rows[:5]
+    )
+    return header + body
+
+
 @app.post("/api/agent")
 def agent_analysis(req: RankRequest) -> dict:
-    """Optional Claude analysis of filtered data. Requires ANTHROPIC_API_KEY on the server."""
+    """Explain the top 5 soft-ranked neighborhoods. Requires ANTHROPIC_API_KEY."""
     if not os.getenv("ANTHROPIC_API_KEY"):
         raise HTTPException(503, "ANTHROPIC_API_KEY not set on the server.")
 
+    # Compute the actual blended ranking the same way /api/rank does, so Claude
+    # explains the *real* recommendations rather than re-ranking on its own.
+    rank_resp = rank(req)
+    if not rank_resp.rows:
+        raise HTTPException(422, "No neighborhoods passed the hard filters.")
+
+    top5 = rank_resp.rows[:5]
+    top5_table = _top5_markdown(rank_resp)
+    top5_names = [r.neighborhood for r in top5]
+
+    # Hard-filtered raw rows so the run_sql tool can look up extra detail
+    # (foot traffic, activity counts, density, etc.) about the fixed top 5.
     df_full = load_features(req.vintage)
     boroughs_in_data = sorted(df_full["borough"].dropna().unique().tolist())
     con = duckdb.connect()
     con.register("nbhd", df_full)
-    sql, params = _build_sql(req.filters, boroughs_in_data)
-    df_filtered = con.execute(sql, params).fetchdf()
+    sql_text, params = _build_sql(req.filters, boroughs_in_data)
+    df_filtered = con.execute(sql_text, params).fetchdf()
     con.close()
-
-    if df_filtered.empty:
-        raise HTTPException(422, "No neighborhoods passed the hard filters.")
 
     from src.agent import run_agent
 
     prompt = (
-        f"The user is looking for: {req.query}\n\n"
-        f"There are {len(df_filtered)} neighborhoods that passed the hard filters. "
-        f"Use the run_sql tool to explore the data and recommend the top 3-5 "
-        f"neighborhoods that best match the user's soft preferences. "
-        f"Explain your reasoning with specific data points."
+        f"The user's query is:\n\n> {req.query}\n\n"
+        f"The semantic + competitive blended ranker has already produced the "
+        f"final top-5 recommendations. These are FIXED and FINAL — your job is "
+        f"only to explain why each one matches the user's query, **in the exact "
+        f"order given**. Do not re-rank, drop, replace, or reorder them. Do not "
+        f"suggest other neighborhoods.\n\n"
+        f"## Top 5 (final, fixed, ordered)\n\n"
+        f"{top5_table}\n\n"
+        f"## Your task\n\n"
+        f"Identify the **key intent words** in the user's query (e.g. 'restaurant', "
+        f"'family', 'tech', 'quiet', 'walkable') and map them to the most relevant "
+        f"feature columns (e.g. 'restaurant' → `act_FOOD_SERVICES_storefront`, "
+        f"`food_services`, `avg_pedestrian`, `competitive_score`). For each of the "
+        f"5 neighborhoods (in the same order, highest blended_score → lowest):\n"
+        f"  1. Render the neighborhood name as a bold markdown header (numbered 1–5).\n"
+        f"  2. Write a 2–3 sentence explanation that grounds the recommendation in "
+        f"specific data points from this CDTA — foot traffic, dominant business "
+        f"categories from the act_*_storefront columns, density metrics, the "
+        f"competitive_score, and any other meaningful columns that connect to "
+        f"the user's intent.\n"
+        f"  3. Tie each explanation directly to the user's query — name the intent "
+        f"words and the columns you used.\n\n"
+        f"Avoid generic statements. Every claim must reference a concrete number or "
+        f"category from the data.\n\n"
+        f"You may call the `run_sql` tool to look up additional detail about any of "
+        f"the 5 neighborhoods — but ONLY for retrieving more context, NEVER for "
+        f"ranking, reordering, filtering, or replacing the fixed top 5. The "
+        f"`neighborhoods` table you query is the hard-filtered set ({len(df_filtered)} rows). "
+        f"When you're done, call the `done` tool with the final markdown answer "
+        f"as a numbered list (1–5) with bold neighborhood-name headers.\n\n"
+        f"The 5 neighborhoods you must explain, in this exact order: "
+        f"{', '.join(top5_names)}."
     )
     try:
         answer = run_agent(prompt, df_filtered, max_turns=20)

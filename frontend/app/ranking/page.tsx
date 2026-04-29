@@ -346,6 +346,15 @@ export default function RankingPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
         <aside className="space-y-5">
+          <SectionCard
+            title="Generated SQL"
+            caption="Live DuckDB query that powers the hard-filtered table below."
+          >
+            <pre className="text-[11px] leading-5 bg-slate-900/95 text-slate-100 rounded-xl p-3 overflow-auto font-mono whitespace-pre-wrap">
+              {filtered?.sql || (filterError ? `-- error: ${filterError}` : "—")}
+            </pre>
+          </SectionCard>
+
           <SectionCard title="Hard Filters">
             <div className="space-y-4">
               <MultiSelect
@@ -717,11 +726,6 @@ export default function RankingPage() {
             )}
           </SectionCard>
 
-          <SectionCard title="Generated SQL" caption="DuckDB query against `neighborhoods`.">
-            <pre className="text-[12px] leading-5 bg-slate-900/95 text-slate-100 rounded-xl p-4 overflow-auto font-mono">
-              {result?.sql || "—"}
-            </pre>
-          </SectionCard>
         </div>
       </div>
     </div>

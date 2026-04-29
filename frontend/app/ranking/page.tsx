@@ -17,6 +17,9 @@ import { Slider } from "@/components/Slider";
 const DEFAULT_QUERY =
   "quiet residential area suitable for boutique retail with good subway access";
 
+const fmt = (v: number | null | undefined, digits: number): string =>
+  typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—";
+
 export default function RankingPage() {
   const [ranges, setRanges] = useState<FeatureRangesResponse | null>(null);
   const [geo, setGeo] = useState<CdtaGeoResponse | null>(null);
@@ -179,7 +182,9 @@ export default function RankingPage() {
   const mapPlot = useMemo(() => {
     if (!result || !geo || !geo.geojson.features.length || !result.rows.length)
       return null;
-    const rows = result.rows.filter((row) => row.map_key);
+    const rows = result.rows.filter(
+      (row) => row.map_key && Number.isFinite(row.blended_score),
+    );
     if (!rows.length) return null;
     const zmin = Math.min(...rows.map((r) => r.blended_score));
     const zmax = Math.max(...rows.map((r) => r.blended_score));
@@ -201,7 +206,7 @@ export default function RankingPage() {
       colorbar: { title: { text: "Blended" }, tickformat: ".3f" },
       text: rows.map(
         (r) =>
-          `${r.neighborhood}<br>rank ${r.rank}<br>blended ${r.blended_score.toFixed(3)}`,
+          `${r.neighborhood}<br>rank ${r.rank}<br>blended ${fmt(r.blended_score, 3)}`,
       ),
       hovertemplate: "<b>%{text}</b><extra></extra>",
     };
@@ -484,10 +489,10 @@ export default function RankingPage() {
                             {row.cluster_description || ""}
                           </td>
                         )}
-                        <td>{row.semantic_similarity.toFixed(4)}</td>
-                        <td>{row.specific_competitive_score.toFixed(3)}</td>
+                        <td>{fmt(row.semantic_similarity, 4)}</td>
+                        <td>{fmt(row.specific_competitive_score, 3)}</td>
                         <td className="font-medium">
-                          {row.blended_score.toFixed(4)}
+                          {fmt(row.blended_score, 4)}
                         </td>
                       </tr>
                     ))}

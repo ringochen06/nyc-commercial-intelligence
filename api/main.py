@@ -429,7 +429,7 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
                 borough=borough,
                 map_key=f"{cd} | {borough}" if cd and borough else None,
                 semantic_similarity=float(sims[idx]),
-                commercial_activity_score=float(activity[idx]),
+                specific_competitive_score=float(activity[idx]),
                 blended_score=float(final[idx]),
                 cluster=int(cluster_id) if cluster_id is not None else None,
                 cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,

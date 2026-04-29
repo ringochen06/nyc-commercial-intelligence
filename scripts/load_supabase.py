@@ -50,6 +50,49 @@ RENAME_MAP: dict[str, str] = {
 }
 
 
+# Columns that exist in `public.neighborhoods` after migrations 0001-0007.
+# 0006 dropped all per-activity (act_*) and NFH score columns since they're not
+# consumed by /api/rank. The pipeline still computes them — they go into the
+# embedding text profile — but we don't persist them in the table itself.
+# Keep this list in sync with supabase/migrations/000{2,6}.
+DB_COLUMNS_ALLOWED: set[str] = {
+    "neighborhood",
+    "cd",
+    "borough",
+    "area_km2",
+    "avg_pedestrian",
+    "peak_pedestrian",
+    "pedestrian_count_points",
+    "subway_station_count",
+    "storefront_filing_count",
+    "construction_jobs",
+    "manufacturing_jobs",
+    "wholesale_jobs",
+    "pop_black",
+    "pop_hispanic",
+    "pop_asian",
+    "total_population_proxy",
+    "food_services",
+    "total_businesses",
+    "commute_public_transit",
+    "pct_bachelors_plus",
+    "total_jobs",
+    "category_diversity",
+    "category_entropy",
+    "subway_density_per_km2",
+    "storefront_density_per_km2",
+    "commercial_activity_score",
+    "transit_activity_score",
+    # Added in 0006:
+    "shooting_incident_count",
+    "median_household_income",
+    "competitive_score",
+    # Populated per row by this script:
+    "embedding",
+    "embedding_text",
+}
+
+
 def to_db_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Lowercase column names; resolve the act_OTHER_/act_other_ collision."""
     out = df.copy()
@@ -61,7 +104,11 @@ def to_db_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
-    load_dotenv()
+    # Look for credentials in either .env or .env.local (preferring .env if both exist).
+    if (REPO_ROOT / ".env").is_file():
+        load_dotenv(REPO_ROOT / ".env")
+    if (REPO_ROOT / ".env.local").is_file():
+        load_dotenv(REPO_ROOT / ".env.local")
 
     supabase_url = os.getenv("SUPABASE_URL")
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -104,10 +151,20 @@ def main() -> None:
     # so coerce whole-number floats to ints. Ints serialize fine into both
     # integer and double-precision columns.
     db_df = to_db_columns(df)
+    # Skip CSV columns the table doesn't have (act_*, nfh_*, etc.) — they're
+    # still useful in the embedding text but the table schema doesn't store them.
+    csv_cols = set(db_df.columns)
+    persisted = csv_cols & DB_COLUMNS_ALLOWED
+    skipped = sorted(csv_cols - DB_COLUMNS_ALLOWED)
+    if skipped:
+        print(f"skipping {len(skipped)} CSV columns not in the DB schema: {skipped[:6]}{'…' if len(skipped) > 6 else ''}")
+
     rows: list[dict] = []
     for i, row in db_df.iterrows():
         record: dict = {}
         for col, val in row.items():
+            if col not in persisted:
+                continue
             if pd.isna(val):
                 record[col] = None
                 continue

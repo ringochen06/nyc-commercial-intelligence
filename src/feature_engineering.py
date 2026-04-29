@@ -210,7 +210,7 @@ def build_shooting_features(shooting_joined: pd.DataFrame) -> pd.DataFrame:
     feat = (
         shooting_joined.groupby(keys, dropna=False)
         .agg(
-            shooting_incident_count_2024=(
+            shooting_incident_count=(
                 (id_col, "nunique") if id_col else ("latitude", "count")
             ),
         )
@@ -225,11 +225,11 @@ def build_shooting_neighborhood_features(
     out = area_df[["neighborhood", "cd", "borough", "area_km2"]].merge(
         shooting_feat, on=["neighborhood", "cd", "borough"], how="left"
     )
-    out["shooting_incident_count_2024"] = pd.to_numeric(
-        out["shooting_incident_count_2024"], errors="coerce"
+    out["shooting_incident_count"] = pd.to_numeric(
+        out["shooting_incident_count"], errors="coerce"
     ).fillna(0)
     out["shooting_density_per_km2"] = safe_divide(
-        out["shooting_incident_count_2024"], out["area_km2"]
+        out["shooting_incident_count"], out["area_km2"]
     ).fillna(0)
     return out
 
@@ -407,9 +407,9 @@ def merge_all_features(
     for col in ["subway_station_count"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
-    if "shooting_incident_count_2024" in df.columns:
-        df["shooting_incident_count_2024"] = pd.to_numeric(
-            df["shooting_incident_count_2024"], errors="coerce"
+    if "shooting_incident_count" in df.columns:
+        df["shooting_incident_count"] = pd.to_numeric(
+            df["shooting_incident_count"], errors="coerce"
         ).fillna(0)
 
     # Pedestrian: avoid a single citywide mean for all missing CDTAs (that collapses values).
@@ -513,7 +513,7 @@ def run_feature_engineering(
         shooting_feat = build_shooting_features(shooting_joined)
     else:
         shooting_feat = area_df[["neighborhood", "cd", "borough"]].copy()
-        shooting_feat["shooting_incident_count_2024"] = 0
+        shooting_feat["shooting_incident_count"] = 0
 
     if storefront_raw_path is not None and Path(storefront_raw_path).exists():
         sf_clean = clean_storefront_data(storefront_raw_path)

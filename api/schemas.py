@@ -13,8 +13,21 @@ Vintage = Literal["present"]
 class ClusterRequest(BaseModel):
     features: list[str] = Field(..., min_length=1, description="Feature column names used for clustering.")
     boroughs: list[str] | None = Field(None, description="If set, restrict to these boroughs.")
-    max_k: int = Field(8, ge=2, le=15)
-    vintage: Vintage = "present"
+    max_k: int = Field(
+        8,
+        ge=2,
+        le=15,
+        description="Upper bound for the k sweep (k runs from 2 through min(max_k, n − 1)).",
+    )
+    chosen_k: int | None = Field(
+        None,
+        description="Number of clusters for assignments / maps / summaries. Must lie in the swept k range. "
+        "If omitted, falls back to the inertia elbow heuristic.",
+    )
+    vintage: Vintage = Field(
+        "present",
+        description='Feature snapshot. Only "present" is implemented (reads neighborhood_features_final.csv).',
+    )
     random_state: int = 42
 
 
@@ -39,8 +52,11 @@ class ClusterResponse(BaseModel):
     inertias: list[float]
     silhouettes_numpy: list[float]
     silhouettes_sklearn: list[float]
-    elbow_k: int
-    elbow_k_kneedle: int
+    elbow_k: int = Field(..., description="k from max perpendicular distance to the inertia chord (normalized axes).")
+    elbow_k_kneedle: int = Field(
+        ...,
+        description="Alternative elbow: k where |Δ² inertia| is largest on the normalized inertia curve.",
+    )
     best_silhouette_k: int
     chosen_k: int
     features: list[str]
@@ -68,7 +84,10 @@ class RankRequest(BaseModel):
     query: str = Field("quiet residential area suitable for boutique retail with good subway access")
     alpha: float = Field(0.8, ge=0.0, le=1.0, description="Semantic weight; competitive weight = 1 - alpha.")
     filters: HardFilters = HardFilters()
-    vintage: Vintage = "present"
+    vintage: Vintage = Field(
+        "present",
+        description='Feature snapshot. Only "present" is implemented (reads neighborhood_features_final.csv).',
+    )
     competitive_source: str = "__overall__"
     cluster_assignments: dict[str, int] | None = None
     cluster_briefs: dict[str, str] | None = None
@@ -104,5 +123,8 @@ class FeatureRangesResponse(BaseModel):
     ranges: dict[str, FeatureRange]
     has_nfh_goal4: bool
     has_nfh_overall: bool
-    activity_columns: list[str]
-    density_columns: list[str]
+    activity_columns: list[str] = Field(..., description="Columns matching act_*_storefront (primary business activity counts).")
+    density_columns: list[str] = Field(
+        ...,
+        description="Columns matching act_*_density (per-category filing share).",
+    )

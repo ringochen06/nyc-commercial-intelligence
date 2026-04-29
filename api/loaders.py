@@ -20,6 +20,12 @@ CDTA_SHAPE_PATH = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.sh
 
 @lru_cache(maxsize=2)
 def load_features(vintage: str = "present") -> pd.DataFrame:
+    """Load the merged CDTA feature table.
+
+    ``vintage`` is reserved for future multi-vintage CSV paths (e.g. comparing years).
+    Currently only ``present`` is supported and reads ``neighborhood_features_final.csv``.
+    """
+    _ = vintage  # explicit no-op until multi-file vintages exist
     path = NEIGHBORHOOD_FEATURES_CSV
     if not path.is_file():
         raise FileNotFoundError(f"Feature CSV not found at {path}. Run the pipeline or include the file in the deployment.")

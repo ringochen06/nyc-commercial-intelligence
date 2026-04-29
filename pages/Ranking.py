@@ -65,6 +65,13 @@ st.caption(
 # ── Load data ───────────────────────────────────────────────────────────────
 
 df_full = load_neighborhood_features()
+SHOOTING_COUNT_COL = (
+    "shooting_incident_count"
+    if "shooting_incident_count" in df_full.columns
+    else "shooting_incident_count_2024"
+    if "shooting_incident_count_2024" in df_full.columns
+    else None
+)
 
 # ── Sidebar: Hard Filters ──────────────────────────────────────────────────
 
@@ -173,20 +180,18 @@ comp_max_threshold = st.sidebar.slider(
 )
 
 # Crime upper bound
-crime_min = float(
-    pd.to_numeric(df_full["shooting_incident_count_2024"], errors="coerce").min()
-)
-crime_max = float(
-    pd.to_numeric(df_full["shooting_incident_count_2024"], errors="coerce").max()
-)
-crime_max_threshold = st.sidebar.slider(
-    "Max shooting incident count (2024)",
-    min_value=crime_min,
-    max_value=crime_max,
-    value=crime_max,
-    step=1.0,
-    help="Upper bound on total NYPD shooting incidents (2024) per neighborhood.",
-)
+crime_max_threshold = None
+if SHOOTING_COUNT_COL is not None:
+    crime_min = float(pd.to_numeric(df_full[SHOOTING_COUNT_COL], errors="coerce").min())
+    crime_max = float(pd.to_numeric(df_full[SHOOTING_COUNT_COL], errors="coerce").max())
+    crime_max_threshold = st.sidebar.slider(
+        "Max shooting incident count",
+        min_value=crime_min,
+        max_value=crime_max,
+        value=crime_max,
+        step=1.0,
+        help="Upper bound on total NYPD shooting incidents per neighborhood.",
+    )
 
 # NFH minimums (same style as other hard filters; only shown when columns exist)
 has_nfh_shocks = "nfh_goal4_fin_shocks_score" in df_full.columns
@@ -240,7 +245,7 @@ def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
           AND storefront_filing_count >= {poi_threshold}
           AND commercial_activity_score >= {comm_threshold}
           AND competitive_score <= {comp_max_threshold}
-          AND shooting_incident_count_2024 <= {crime_max_threshold}
+          {"AND " + SHOOTING_COUNT_COL + " <= " + str(float(crime_max_threshold)) if (SHOOTING_COUNT_COL is not None and crime_max_threshold is not None) else ""}
           {"AND nfh_goal4_fin_shocks_score >= " + str(float(nfh_goal4_threshold)) if nfh_goal4_threshold is not None else ""}
           {"AND nfh_overall_score >= " + str(float(nfh_overall_threshold)) if nfh_overall_threshold is not None else ""}
         ORDER BY commercial_activity_score DESC
@@ -268,7 +273,7 @@ with st.expander("View generated SQL", expanded=False):
         f"  AND storefront_filing_count >= {poi_threshold}\n"
         f"  AND commercial_activity_score >= {comm_threshold}\n"
         f"  AND competitive_score <= {comp_max_threshold}\n"
-        f"  AND shooting_incident_count_2024 <= {crime_max_threshold}\n"
+        f"{'  AND ' + SHOOTING_COUNT_COL + ' <= ' + str(float(crime_max_threshold)) + chr(10) if (SHOOTING_COUNT_COL is not None and crime_max_threshold is not None) else ''}"
         f"{'  AND nfh_goal4_fin_shocks_score >= ' + str(float(nfh_goal4_threshold)) + chr(10) if nfh_goal4_threshold is not None else ''}"
         f"{'  AND nfh_overall_score >= ' + str(float(nfh_overall_threshold)) + chr(10) if nfh_overall_threshold is not None else ''}"
         f"ORDER BY commercial_activity_score DESC;",
@@ -296,12 +301,13 @@ display_cols.extend(
         "subway_station_count",
         "avg_pedestrian",
         "storefront_density_per_km2",
-        "shooting_incident_count_2024",
         "commercial_activity_score",
         "competitive_score",
         "transit_activity_score",
     ]
 )
+if SHOOTING_COUNT_COL is not None:
+    display_cols.insert(display_cols.index("commercial_activity_score"), SHOOTING_COUNT_COL)
 for optional_col in ["nfh_overall_score", "nfh_goal4_fin_shocks_score"]:
     if optional_col in df_filtered.columns:
         display_cols.append(optional_col)
@@ -657,7 +663,7 @@ with col1:
         "| `storefront_filing_count` | int | Non-vacant storefront filings (CDTA) |\n"
         "| `commercial_activity_score` | float | `log1p`(storefront filings \u00d7 avg pedestrian) |\n"
         "| `competitive_score` | float | `log1p`(storefront filings / (avg pedestrian + 1)); used as a **max** hard-filter cap |\n"
-        "| `shooting_incident_count_2024` | float | Total shooting incidents (2024); used as a **max** hard-filter cap |\n"
+        "| `shooting_incident_count` | float | Total shooting incidents; used as a **max** hard-filter cap |\n"
         "| `nfh_goal4_fin_shocks_score` | float | NFH Goal 4 (financial shocks) index (when column exists) |\n"
         "| `nfh_overall_score` | float | NFH overall index (when column exists) |\n"
         "| `act_*_storefront` | int | **Not** in the default `WHERE`; available in `SELECT *` and the table above. Add thresholds in SQL if you need category-specific hard filters. |"

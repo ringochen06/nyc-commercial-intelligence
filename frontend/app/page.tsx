@@ -19,12 +19,17 @@ const CANDIDATE_FEATURES = [
   "avg_pedestrian",
   "subway_station_count",
   "storefront_density_per_km2",
+  "commercial_activity_score",
   "competitive_score",
+  "shooting_incident_count",
   "transit_activity_score",
   "category_entropy",
   "category_diversity",
   "peak_pedestrian",
   "subway_density_per_km2",
+  "nfh_overall_score",
+  "nfh_goal4_fin_shocks_score",
+  "total_jobs",
 ];
 
 const DEFAULT_FEATURES = [
@@ -32,9 +37,13 @@ const DEFAULT_FEATURES = [
   "avg_pedestrian",
   "subway_station_count",
   "storefront_density_per_km2",
+  "commercial_activity_score",
   "competitive_score",
+  "shooting_incident_count",
   "transit_activity_score",
   "category_entropy",
+  "nfh_overall_score",
+  "total_jobs",
 ];
 
 export default function KSelectionPage() {
@@ -42,6 +51,8 @@ export default function KSelectionPage() {
   const [boroughs, setBoroughs] = useState<string[]>([]);
   const [features, setFeatures] = useState<string[]>(DEFAULT_FEATURES);
   const [maxK, setMaxK] = useState(8);
+  /** Partition size for maps / Ranking (must lie in the swept k range). */
+  const [chosenK, setChosenK] = useState(8);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ClusterResponse | null>(null);
@@ -66,7 +77,12 @@ export default function KSelectionPage() {
     api.cdtaGeo().then(setGeo).catch(() => {});
   }, []);
 
-  const runAnalysis = async () => {
+  useEffect(() => {
+    setChosenK((k) => Math.min(Math.max(k, 2), maxK));
+  }, [maxK]);
+
+  const fetchCluster = async (partitionK?: number) => {
+    const kUse = partitionK ?? chosenK;
     setError(null);
     setLoading(true);
     try {
@@ -75,8 +91,10 @@ export default function KSelectionPage() {
         boroughs,
         max_k: maxK,
         vintage: "present",
+        chosen_k: kUse,
       });
       setResult(r);
+      setChosenK(r.chosen_k);
       // Persist for the Ranking page.
       const assignments: Record<string, number> = {};
       for (const p of r.points) assignments[p.neighborhood] = p.cluster;
@@ -292,8 +310,8 @@ export default function KSelectionPage() {
       <div>
         <h1 className="text-2xl font-bold text-ink">K-Selection / Clustering</h1>
         <p className="text-sm text-muted mt-1">
-          Compare inertia and silhouette across k = 2…max_k, then explore
-          clusters. Run analysis to refresh labels used on the Ranking page.
+          Sweep k = 2…max_k for elbow charts; pick <strong>Clusters (k)</strong>{" "}
+          for the partition shown on maps and synced to Ranking.
         </p>
       </div>
 
@@ -323,15 +341,26 @@ export default function KSelectionPage() {
               value={maxK}
               min={3}
               max={15}
-              onChange={setMaxK}
+              onChange={(v) => {
+                setMaxK(v);
+                setChosenK(v);
+              }}
               hint="Upper bound for k sweep. Capped at (n − 1) by the server."
+            />
+            <Slider
+              label="Clusters (k)"
+              value={chosenK}
+              min={2}
+              max={maxK}
+              onChange={setChosenK}
+              hint="How many clusters to visualize and sync to Ranking (must be within the sweep)."
             />
           </div>
         </div>
 
         <div className="mt-6 flex items-center gap-3">
           <button
-            onClick={runAnalysis}
+            onClick={() => fetchCluster()}
             disabled={loading || features.length === 0 || boroughs.length === 0}
             className="bg-ink text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
           >
@@ -345,9 +374,37 @@ export default function KSelectionPage() {
         <>
           <SectionCard
             title="Elbow + Silhouette"
-            caption={`Primary k = ${result.elbow_k} (grey dashed). Kneedle k = ${result.elbow_k_kneedle}. Best silhouette k = ${result.best_silhouette_k}.`}
+            caption={`Heuristic inertia elbow k = ${result.elbow_k} (grey dashed). Kneedle = ${result.elbow_k_kneedle}. Best silhouette = ${result.best_silhouette_k}. Your partition uses k = ${result.chosen_k}.`}
           >
             {elbowPlot}
+          </SectionCard>
+
+          <SectionCard title="Cluster count">
+            <p className="text-sm text-muted mb-2">
+              Change k and apply to redraw maps and refresh Ranking labels (same
+              feature set and boroughs).
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-sm font-medium">
+                Clusters (k){" "}
+                <select
+                  className="border rounded px-2 py-1 text-sm ml-2"
+                  value={chosenK}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setChosenK(v);
+                    fetchCluster(v);
+                  }}
+                  disabled={loading}
+                >
+                  {result.k_range.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </SectionCard>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -422,7 +479,7 @@ export default function KSelectionPage() {
               </thead>
               <tbody>
                 {result.k_range.map((k, i) => {
-                  const highlight = k === result.elbow_k;
+                  const highlight = k === result.chosen_k;
                   return (
                     <tr
                       key={k}

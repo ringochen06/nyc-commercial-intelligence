@@ -12,7 +12,9 @@ export interface FeatureRangesResponse {
   ranges: Record<string, FeatureRange>;
   has_nfh_goal4: boolean;
   has_nfh_overall: boolean;
+  /** act_*_storefront column names from neighborhood_features_final.csv */
   activity_columns: string[];
+  /** act_*_density (per-category filing share); mirrors api/schemas.py */
   density_columns: string[];
 }
 

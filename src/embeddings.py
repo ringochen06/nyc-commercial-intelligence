@@ -133,7 +133,7 @@ def build_text_profile(row: pd.Series) -> str:
     commercial = round(float(row.get("commercial_activity_score", 0)), 0)
     competitive = round(float(row.get("competitive_score", 0)), 2)
     transit = round(float(row.get("transit_activity_score", 0)), 0)
-    shooting_incidents = int(float(row.get("shooting_incident_count_2024", 0) or 0))
+    shooting_incidents = int(float(row.get("shooting_incident_count", 0) or 0))
     construction_jobs = int(float(row.get("construction_jobs", 0) or 0))
     manufacturing_jobs = int(float(row.get("manufacturing_jobs", 0) or 0))
     wholesale_jobs = int(float(row.get("wholesale_jobs", 0) or 0))

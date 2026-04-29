@@ -1,4 +1,4 @@
-neighborhood,cd,borough,area_km2,shooting_incident_count_2024,shooting_density_per_km2
+neighborhood,cd,borough,area_km2,shooting_incident_count,shooting_density_per_km2
 BK01 Williamsburg-Greenpoint (CD 1 Equivalent),BK01,BROOKLYN,12.230775785367017,12.0,0.9811315496729881
 BK02 Downtown Brooklyn-Fort Greene (CD 2 Approximation),BK02,BROOKLYN,7.05326730424141,10.0,1.41778264861543
 BK03 Bedford-Stuyvesant (CD 3 Approximation),BK03,BROOKLYN,7.264679470748309,34.0,4.6801789586041815

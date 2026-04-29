@@ -282,48 +282,6 @@ def clean_storefront_data_eval(
     return df.reset_index(drop=True)
 
 
-def enrich_final_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Post-process the merged final features DataFrame.
-
-    1. Adds ``total_poi`` column sourced from ``total_businesses`` (MOCEJ 2016
-       neighborhood profile) so downstream consumers have a stable POI proxy.
-    2. For neighborhoods where storefront data is absent (``storefront_filing_count``
-       is 0 or NaN), fills ``storefront_density_per_km2`` using
-       ``total_poi / area_km2`` so every row has a non-null density estimate.
-    """
-    df = df.copy()
-
-    # total_poi: stable alias for the MOCEJ total-businesses POI proxy
-    if "total_businesses" in df.columns:
-        df["total_poi"] = pd.to_numeric(df["total_businesses"], errors="coerce").fillna(
-            0
-        )
-    else:
-        df["total_poi"] = 0.0
-
-    # Fill storefront_density_per_km2 for neighborhoods with no storefront filings
-    if "storefront_density_per_km2" in df.columns and "area_km2" in df.columns:
-        missing_mask = (df["storefront_filing_count"].fillna(0) == 0) & (
-            df["area_km2"].fillna(0) > 0
-        )
-        fallback_density = df["total_poi"] / df["area_km2"].replace(0, float("nan"))
-        fallback_filing_count = df["total_poi"]
-        df.loc[missing_mask, "storefront_density_per_km2"] = fallback_density[
-            missing_mask
-        ]
-        df.loc[missing_mask, "storefront_filing_count"] = fallback_filing_count[
-            missing_mask
-        ]
-        n_filled = int(missing_mask.sum())
-        if n_filled:
-            print(
-                f"  storefront_density_per_km2: filled {n_filled} neighborhoods "
-                "using total_poi / area_km2 (no storefront filings)"
-            )
-
-    return df
-
-
 def run_eval_processing(
     storefront_path: (
         str | Path

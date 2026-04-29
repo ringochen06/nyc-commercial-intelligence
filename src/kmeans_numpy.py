@@ -84,13 +84,13 @@ def kmeans(
     centroids = X[rng.choice(n, size=k, replace=False)]
     for i in range(max_iter):
         z = assign_labels(X, centroids)
-        new_centroids = update_centroids(X, z, k)
+        new_centroids = update_centroids(X, z, k, rng)
         if np.linalg.norm(new_centroids - centroids) < tol:
             centroids = new_centroids
             break
         centroids = new_centroids
 
-    return z, centroids, i + 1 
+    return z, centroids, i + 1
     
 
 def kmeans_plus_plus(
@@ -106,25 +106,24 @@ def kmeans_plus_plus(
     rng = np.random.default_rng(random_state)
     initial_centroid = X[rng.choice(X.shape[0])]
     centroids = [initial_centroid]
-    
-    #print(f"X.shape[0]={X.shape[0]}, initial_centroid shape={initial_centroid.shape}")
+
     for c in range(1, k):
         dist = pairwise_squared_euclidean(X, np.array(centroids))  # (n, c)
         min_dist_to_centroid = np.min(dist, axis=1)  # (n,)
-        probs = min_dist_to_centroid/ np.sum(min_dist_to_centroid)
+        probs = min_dist_to_centroid / np.sum(min_dist_to_centroid)
         next_centroid = X[rng.choice(X.shape[0], p=probs)]
         centroids.append(next_centroid)
     centroids = np.array(centroids)  # (k, d)
-    
+
     for i in range(max_iter):
         z = assign_labels(X, centroids)
-        new_centroids = update_centroids(X, z, k)
+        new_centroids = update_centroids(X, z, k, rng)
         if np.linalg.norm(new_centroids - centroids) < tol:
             centroids = new_centroids
             break
         centroids = new_centroids
 
-    return z, centroids, i + 1 
+    return z, centroids, i + 1
     
 
 def kmeans_plus_plus_with_caching(
@@ -211,15 +210,14 @@ def assign_labels(X: np.ndarray, centroids: np.ndarray) -> np.ndarray:
     return np.argmin(distances, axis=1)
 
 
-def update_centroids(X: np.ndarray, labels: np.ndarray, k: int) -> np.ndarray:
+def update_centroids(X: np.ndarray, labels: np.ndarray, k: int, rng: np.random.Generator | None = None) -> np.ndarray:
     """Recompute centroids as mean of assigned points; empty clusters need a policy (e.g. reinit)."""
     indicator = np.array([labels == j for j in range(k)], dtype=float)  # (k, n)
     counts = np.sum(indicator, axis=1)  # (k,)
-      # (k, d)
     empty = np.where(counts == 0)[0]
     if len(empty) > 0:
-        rng = np.random.default_rng()
-        reinit_indices = rng.choice(X.shape[0], size=len(empty), replace=False)
+        _rng = rng if rng is not None else np.random.default_rng()
+        reinit_indices = _rng.choice(X.shape[0], size=len(empty), replace=False)
         #indicator[empty] = 0.0
         indicator[empty, reinit_indices] = 1.0
         counts[empty] = 1.0

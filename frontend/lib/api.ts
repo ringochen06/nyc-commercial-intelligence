@@ -39,6 +39,7 @@ export const api = {
     boroughs?: string[];
     max_k: number;
     vintage: Vintage;
+    chosen_k?: number;
     random_state?: number;
   }) =>
     request<ClusterResponse>("/api/cluster", {

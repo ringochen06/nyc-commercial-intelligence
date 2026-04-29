@@ -57,6 +57,7 @@ from src.embeddings import (  # noqa: E402
     embed_texts,
 )
 from src.feature_engineering import (  # noqa: E402
+    is_act_density_column,
     is_act_storefront_column,
 )
 from src.kmeans_numpy import (  # noqa: E402
@@ -113,15 +114,19 @@ def _find_elbow(k_range: list[int], inertias: list[float]) -> int:
     return k_range[int(np.argmax(distances))]
 
 
-def _find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
-    if len(k_range) <= 3:
-        return k_range[int(np.argmin(inertias))]
-    ys = np.array(inertias, dtype=float)
-    local_minima = [i for i in range(1, len(ys) - 1) if ys[i] < ys[i - 1] and ys[i] < ys[i + 1]]
-    if not local_minima:
-        return _find_elbow(k_range, inertias)
-    best_i = min(local_minima, key=lambda i: ys[i])
-    return k_range[best_i]
+def _find_elbow_curvature_knee(k_range: list[int], inertias: list[float]) -> int:
+    """Alternative elbow: k at largest |Δ²(inertia)| on the inertia curve (normalized)."""
+    ys = np.asarray(inertias, dtype=float)
+    ks = np.asarray(k_range, dtype=float)
+    if ks.size < 3:
+        return int(k_range[0])
+    yn = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
+    d2 = np.diff(yn, n=2)
+    if d2.size == 0:
+        return int(k_range[len(k_range) // 2])
+    j = int(np.argmax(np.abs(d2)))
+    mid = min(max(j + 1, 0), len(k_range) - 1)
+    return int(k_range[mid])
 
 
 def _cluster_brief(centroid: np.ndarray, features: list[str], hi_thr: float = 0.5, lo_thr: float = -0.5) -> str:
@@ -167,12 +172,13 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
         "storefront_filing_count",
         "commercial_activity_score",
         "competitive_score",
-        "shooting_incident_count_2024",
+        "shooting_incident_count",
         "transit_activity_score",
         "category_entropy",
         "category_diversity",
         "peak_pedestrian",
         "subway_density_per_km2",
+        "total_jobs",
     ]
 
     ranges: dict[str, FeatureRange] = {}
@@ -197,7 +203,7 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
         has_nfh_goal4=has_nfh_goal4,
         has_nfh_overall=has_nfh_overall,
         activity_columns=sorted(c for c in df.columns if is_act_storefront_column(c)),
-        density_columns=[],
+        density_columns=sorted(c for c in df.columns if is_act_density_column(c)),
     )
 
 
@@ -237,17 +243,30 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
     inertias: list[float] = []
     sil_numpy: list[float] = []
     sil_sklearn: list[float] = []
+    # Cache labels/centroids from the sweep so viz_k doesn't need a second run.
+    _sweep_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     for k in k_range:
         labels, centroids, _ = kmeans_plus_plus(X, k, random_state=req.random_state)
+        _sweep_cache[k] = (labels, centroids)
         inertias.append(compute_inertia(X, labels, centroids))
         sil_numpy.append(silhouette_score(X, labels))
         sil_sklearn.append(float(sklearn_silhouette_score(X, labels)))
 
-    elbow_k = _find_elbow_minima(k_range, inertias)
-    elbow_k_kneedle = _find_elbow(k_range, inertias)
+    elbow_k = _find_elbow(k_range, inertias)
+    elbow_k_kneedle = _find_elbow_curvature_knee(k_range, inertias)
     best_sil_k = k_range[int(np.argmax(sil_sklearn))]
 
-    viz_labels, viz_centroids, _ = kmeans_plus_plus(X, elbow_k, random_state=req.random_state)
+    if req.chosen_k is not None:
+        viz_k = int(req.chosen_k)
+        if viz_k not in k_range:
+            raise HTTPException(
+                422,
+                f"chosen_k must be one of {k_range} after filtering (n={n}); got {viz_k}.",
+            )
+    else:
+        viz_k = int(elbow_k)
+
+    viz_labels, viz_centroids = _sweep_cache[viz_k]
 
     # Build per-row points with raw feature values + cd/borough for the map.
     points: list[ClusterPoint] = []
@@ -267,7 +286,7 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
         )
 
     summaries: list[ClusterSummary] = []
-    for c in range(elbow_k):
+    for c in range(viz_k):
         size = int((viz_labels == c).sum())
         summaries.append(
             ClusterSummary(
@@ -286,7 +305,7 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
         elbow_k=int(elbow_k),
         elbow_k_kneedle=int(elbow_k_kneedle),
         best_silhouette_k=int(best_sil_k),
-        chosen_k=int(elbow_k),
+        chosen_k=int(viz_k),
         features=req.features,
         feature_means=[float(v) for v in mean],
         feature_stds=[float(v) for v in std],
@@ -325,7 +344,7 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
         where.append("competitive_score <= ?")
         params.append(float(filters.max_competitive_score))
     if filters.max_shooting_incident_count is not None:
-        where.append("shooting_incident_count_2024 <= ?")
+        where.append("shooting_incident_count <= ?")
         params.append(float(filters.max_shooting_incident_count))
     if filters.min_nfh_goal4 is not None:
         where.append("nfh_goal4_fin_shocks_score >= ?")

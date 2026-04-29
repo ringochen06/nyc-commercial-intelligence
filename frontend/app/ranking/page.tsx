@@ -69,8 +69,8 @@ export default function RankingPage() {
           r.ranges["competitive_score"] ? r.ranges["competitive_score"].max : 0,
         );
         setMaxShootingIncident(
-          r.ranges["shooting_incident_count_2024"]
-            ? r.ranges["shooting_incident_count_2024"].max
+          r.ranges["shooting_incident_count"]
+            ? r.ranges["shooting_incident_count"].max
             : 0,
         );
         setMinNfhGoal4(
@@ -328,12 +328,12 @@ export default function RankingPage() {
                   format={(v) => v.toFixed(3)}
                 />
               )}
-              {r?.["shooting_incident_count_2024"] && (
+              {r?.["shooting_incident_count"] && (
                 <Slider
-                  label="Max shooting incident count (2024)"
+                  label="Max shooting incident count"
                   value={maxShootingIncident}
-                  min={r["shooting_incident_count_2024"].min}
-                  max={r["shooting_incident_count_2024"].max}
+                  min={r["shooting_incident_count"].min}
+                  max={r["shooting_incident_count"].max}
                   step={1}
                   onChange={setMaxShootingIncident}
                   format={(v) => v.toFixed(0)}

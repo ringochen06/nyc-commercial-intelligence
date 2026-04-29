@@ -92,8 +92,8 @@ function FilteredTable({
   }, [rows]);
 
   return (
-    <div className="overflow-auto max-h-[480px] -mx-2 px-2">
-      <table className="data-table">
+    <div className="overflow-x-auto overflow-y-auto max-h-[480px] -mx-2 px-2 min-w-0 max-w-full">
+      <table className="data-table w-max">
         <thead>
           <tr>
             <th className="text-right">#</th>
@@ -457,7 +457,7 @@ export default function RankingPage() {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] gap-6">
         <aside className="space-y-5">
           <SectionCard
             title="Generated SQL"
@@ -702,7 +702,7 @@ export default function RankingPage() {
           </SectionCard>
         </aside>
 
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           <SectionCard
             title="Hard-filtered neighborhoods"
             caption={

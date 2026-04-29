@@ -10,6 +10,10 @@ export interface FeatureRange {
 export interface FeatureRangesResponse {
   boroughs: string[];
   ranges: Record<string, FeatureRange>;
+  has_nfh_goal4?: boolean;
+  has_nfh_overall?: boolean;
+  /** act_*_storefront columns present in the feature CSV (used by the competitive-source picker). */
+  activity_columns?: string[];
 }
 
 export interface ClusterPoint {
@@ -54,6 +58,8 @@ export interface HardFilters {
   min_commercial_activity?: number;
   max_competitive_score?: number;
   max_shooting_incident_count?: number;
+  min_nfh_goal4?: number;
+  min_nfh_overall?: number;
 }
 
 export interface RankRequest {
@@ -61,6 +67,8 @@ export interface RankRequest {
   alpha: number;
   filters: HardFilters;
   vintage: Vintage;
+  /** "__overall__" or any act_*_storefront column name. */
+  competitive_source?: string;
   cluster_assignments?: Record<string, number>;
   cluster_briefs?: Record<string, string>;
 }

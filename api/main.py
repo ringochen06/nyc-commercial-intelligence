@@ -187,9 +187,31 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
             if not vals.empty:
                 ranges[col] = FeatureRange(min=float(vals.min()), max=float(vals.max()))
 
+    # NFH columns are optional (depend on whether the NFH raw CSV was present at pipeline time).
+    has_nfh_goal4 = (
+        "nfh_goal4_fin_shocks_score" in df.columns
+        and df["nfh_goal4_fin_shocks_score"].notna().any()
+    )
+    has_nfh_overall = (
+        "nfh_overall_score" in df.columns and df["nfh_overall_score"].notna().any()
+    )
+    if has_nfh_goal4:
+        v = pd.to_numeric(df["nfh_goal4_fin_shocks_score"], errors="coerce").dropna()
+        ranges["nfh_goal4_fin_shocks_score"] = FeatureRange(min=float(v.min()), max=float(v.max()))
+    if has_nfh_overall:
+        v = pd.to_numeric(df["nfh_overall_score"], errors="coerce").dropna()
+        ranges["nfh_overall_score"] = FeatureRange(min=float(v.min()), max=float(v.max()))
+
+    activity_columns = sorted(
+        c for c in df.columns if c.startswith("act_") and c.endswith("_storefront")
+    )
+
     return FeatureRangesResponse(
         boroughs=sorted(df["borough"].dropna().unique().tolist()),
         ranges=ranges,
+        has_nfh_goal4=bool(has_nfh_goal4),
+        has_nfh_overall=bool(has_nfh_overall),
+        activity_columns=activity_columns,
     )
 
 
@@ -332,6 +354,12 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
     if filters.max_shooting_incident_count is not None:
         where.append("shooting_incident_count <= ?")
         params.append(float(filters.max_shooting_incident_count))
+    if filters.min_nfh_goal4 is not None:
+        where.append("nfh_goal4_fin_shocks_score >= ?")
+        params.append(float(filters.min_nfh_goal4))
+    if filters.min_nfh_overall is not None:
+        where.append("nfh_overall_score >= ?")
+        params.append(float(filters.min_nfh_overall))
 
     sql = (
         "SELECT * FROM nbhd WHERE "
@@ -354,6 +382,13 @@ def _supabase_client():
 
 def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
     """Query Supabase via the match_neighborhoods RPC, then blend in Python."""
+    # Per-category competitive scoring needs act_*_storefront columns the RPC
+    # doesn't return — let the caller fall back to the CSV path in that case.
+    if req.competitive_source and req.competitive_source != "__overall__":
+        raise NotImplementedError(
+            "competitive_source != '__overall__' requires the CSV path (per-category act_* data)."
+        )
+
     query_embedding = embed_texts([req.query])[0].tolist()
 
     # match_count default in the SQL is 50; bump to 200 to comfortably cover all CDTAs.
@@ -510,16 +545,40 @@ def rank(req: RankRequest) -> RankResponse:
     query_embedding = embed_texts([req.query])[0]
     sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
-    if "competitive_score" not in df_filtered.columns:
-        raise HTTPException(500, "competitive_score column missing from filtered data.")
-
-    competitive = np.array(
-        [
-            float(df_filtered.loc[df_filtered["neighborhood"] == n, "competitive_score"].iloc[0])
-            for n in keep_names
-        ],
-        dtype=float,
-    )
+    source = req.competitive_source or "__overall__"
+    if source == "__overall__":
+        if "competitive_score" not in df_filtered.columns:
+            raise HTTPException(500, "competitive_score column missing from filtered data.")
+        competitive = np.array(
+            [
+                float(df_filtered.loc[df_filtered["neighborhood"] == n, "competitive_score"].iloc[0])
+                for n in keep_names
+            ],
+            dtype=float,
+        )
+    else:
+        if not (source.startswith("act_") and source.endswith("_storefront")):
+            raise HTTPException(
+                400,
+                f"Invalid competitive_source '{source}'. Use '__overall__' or an act_*_storefront column.",
+            )
+        if source not in df_filtered.columns:
+            raise HTTPException(400, f"Column '{source}' missing from feature table.")
+        counts = np.array(
+            [
+                float(df_filtered.loc[df_filtered["neighborhood"] == n, source].iloc[0])
+                for n in keep_names
+            ],
+            dtype=float,
+        )
+        ped_scores = np.array(
+            [
+                float(df_filtered.loc[df_filtered["neighborhood"] == n, "avg_pedestrian"].iloc[0])
+                for n in keep_names
+            ],
+            dtype=float,
+        )
+        competitive = np.log1p(np.maximum(counts / (ped_scores + 1.0), 0.0))
 
     # Higher competition should lower rank, so use the negated competition signal.
     X = np.column_stack([sim_scores.astype(float), -competitive])

@@ -76,6 +76,8 @@ class HardFilters(BaseModel):
     min_commercial_activity: float | None = None
     max_competitive_score: float | None = None
     max_shooting_incident_count: float | None = None
+    min_nfh_goal4: float | None = None
+    min_nfh_overall: float | None = None
 
 
 class RankRequest(BaseModel):
@@ -85,6 +87,13 @@ class RankRequest(BaseModel):
     vintage: Vintage = Field(
         "present",
         description='Feature snapshot. Only "present" is implemented (reads neighborhood_features_final.csv).',
+    )
+    competitive_source: str = Field(
+        "__overall__",
+        description=(
+            "'__overall__' uses storefront_filing_count for the per-row competitive penalty; "
+            "any 'act_*_storefront' name uses that single category's filings instead."
+        ),
     )
     cluster_assignments: dict[str, int] | None = None
     cluster_briefs: dict[str, str] | None = None
@@ -136,3 +145,9 @@ class FeatureRange(BaseModel):
 class FeatureRangesResponse(BaseModel):
     boroughs: list[str]
     ranges: dict[str, FeatureRange]
+    has_nfh_goal4: bool = False
+    has_nfh_overall: bool = False
+    activity_columns: list[str] = Field(
+        default_factory=list,
+        description="act_*_storefront columns present in the feature CSV (for the competitive-source picker).",
+    )

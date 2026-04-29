@@ -109,11 +109,14 @@ export default function RankingPage() {
   const [minCommercial, setMinCommercial] = useState(0);
   const [maxCompetitive, setMaxCompetitive] = useState(0);
   const [maxShootingIncident, setMaxShootingIncident] = useState(0);
+  const [minNfhGoal4, setMinNfhGoal4] = useState<number | null>(null);
+  const [minNfhOverall, setMinNfhOverall] = useState<number | null>(null);
 
   // Soft preferences
   const [draftQuery, setDraftQuery] = useState(DEFAULT_QUERY);
   const [committedQuery, setCommittedQuery] = useState(DEFAULT_QUERY);
   const [alpha, setAlpha] = useState(0.8);
+  const [competitiveSource, setCompetitiveSource] = useState<string>("__overall__");
 
   const [result, setResult] = useState<RankResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -152,6 +155,16 @@ export default function RankingPage() {
             ? r.ranges["shooting_incident_count"].max
             : 0,
         );
+        setMinNfhGoal4(
+          r.has_nfh_goal4 && r.ranges["nfh_goal4_fin_shocks_score"]
+            ? r.ranges["nfh_goal4_fin_shocks_score"].min
+            : null,
+        );
+        setMinNfhOverall(
+          r.has_nfh_overall && r.ranges["nfh_overall_score"]
+            ? r.ranges["nfh_overall_score"].min
+            : null,
+        );
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -170,6 +183,8 @@ export default function RankingPage() {
       min_commercial_activity: minCommercial,
       max_competitive_score: maxCompetitive,
       max_shooting_incident_count: maxShootingIncident,
+      min_nfh_goal4: minNfhGoal4 ?? undefined,
+      min_nfh_overall: minNfhOverall ?? undefined,
     }),
     [
       boroughs,
@@ -180,6 +195,8 @@ export default function RankingPage() {
       minCommercial,
       maxCompetitive,
       maxShootingIncident,
+      minNfhGoal4,
+      minNfhOverall,
     ],
   );
 
@@ -211,6 +228,7 @@ export default function RankingPage() {
         alpha,
         filters,
         vintage: "present",
+        competitive_source: competitiveSource,
         cluster_assignments: cluster.assignments,
         cluster_briefs: cluster.briefs,
       })
@@ -227,6 +245,7 @@ export default function RankingPage() {
     filters,
     alpha,
     committedQuery,
+    competitiveSource,
     cluster.assignments,
     cluster.briefs,
   ]);
@@ -424,6 +443,32 @@ export default function RankingPage() {
                   format={(v) => v.toFixed(0)}
                 />
               )}
+              {ranges?.has_nfh_goal4 &&
+                r?.["nfh_goal4_fin_shocks_score"] &&
+                minNfhGoal4 !== null && (
+                  <Slider
+                    label="Min NFH Goal 4 (financial shocks)"
+                    value={minNfhGoal4}
+                    min={r["nfh_goal4_fin_shocks_score"].min}
+                    max={r["nfh_goal4_fin_shocks_score"].max}
+                    step={0.1}
+                    onChange={setMinNfhGoal4}
+                    format={(v) => v.toFixed(2)}
+                  />
+                )}
+              {ranges?.has_nfh_overall &&
+                r?.["nfh_overall_score"] &&
+                minNfhOverall !== null && (
+                  <Slider
+                    label="Min NFH overall index"
+                    value={minNfhOverall}
+                    min={r["nfh_overall_score"].min}
+                    max={r["nfh_overall_score"].max}
+                    step={0.1}
+                    onChange={setMinNfhOverall}
+                    format={(v) => v.toFixed(2)}
+                  />
+                )}
             </div>
           </SectionCard>
 
@@ -451,6 +496,32 @@ export default function RankingPage() {
                 onChange={setAlpha}
                 format={(v) => `α=${v.toFixed(2)}, β=${(1 - v).toFixed(2)}`}
               />
+              <div>
+                <div className="text-[13px] font-medium text-ink mb-2">
+                  Competitive score source
+                </div>
+                <select
+                  className="glass-select"
+                  value={competitiveSource}
+                  onChange={(e) => setCompetitiveSource(e.target.value)}
+                >
+                  <option value="__overall__">Overall (all storefront filings)</option>
+                  {(ranges?.activity_columns ?? []).map((col) => (
+                    <option key={col} value={col}>
+                      {col
+                        .replace(/^act_/, "")
+                        .replace(/_storefront$/, "")
+                        .replaceAll("_", " ")
+                        .toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted mt-1.5 leading-4">
+                  Drives the competitive penalty in the blend. Per-category
+                  options compute log1p(filings ÷ (avg pedestrians + 1)) for
+                  that activity.
+                </p>
+              </div>
             </div>
           </SectionCard>
 

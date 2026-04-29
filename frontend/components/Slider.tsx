@@ -21,9 +21,13 @@ export function Slider({
   format,
   hint,
 }: Props) {
-  const display = format ? format(value) : value.toLocaleString();
+  // Clamp incoming value to [min, max] so a stale parent state doesn't
+  // pin the thumb beyond the slider track (browsers refuse to render
+  // out-of-range values, which makes the slider look frozen).
+  const safeValue = Math.min(max, Math.max(min, value));
+  const display = format ? format(safeValue) : safeValue.toLocaleString();
   const span = max - min;
-  const ratio = span > 0 ? Math.min(1, Math.max(0, (value - min) / span)) : 0;
+  const ratio = span > 0 ? (safeValue - min) / span : 0;
   const fill = `${(ratio * 100).toFixed(2)}%`;
   return (
     <label className="block">
@@ -36,7 +40,7 @@ export function Slider({
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={safeValue}
         onChange={(e) => onChange(Number(e.target.value))}
         className="glass-range mt-1.5"
         style={{ ["--fill" as string]: fill }}

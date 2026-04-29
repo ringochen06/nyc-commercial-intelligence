@@ -21,7 +21,7 @@ export function MultiSelect({
   };
   return (
     <div>
-      <div className="text-sm font-medium mb-1">{label}</div>
+      <div className="text-[13px] font-medium text-ink mb-2">{label}</div>
       <div className="flex flex-wrap gap-1.5">
         {options.map((o) => {
           const active = value.includes(o);
@@ -30,12 +30,7 @@ export function MultiSelect({
               key={o}
               type="button"
               onClick={() => toggle(o)}
-              className={
-                "text-xs px-2 py-1 rounded border transition " +
-                (active
-                  ? "bg-ink text-white border-ink"
-                  : "bg-white text-ink border-slate-300 hover:border-slate-500")
-              }
+              className={`pill-chip ${active ? "is-active" : ""}`}
             >
               {format ? format(o) : o}
             </button>

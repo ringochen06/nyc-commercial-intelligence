@@ -22,11 +22,14 @@ export function Slider({
   hint,
 }: Props) {
   const display = format ? format(value) : value.toLocaleString();
+  const span = max - min;
+  const ratio = span > 0 ? Math.min(1, Math.max(0, (value - min) / span)) : 0;
+  const fill = `${(ratio * 100).toFixed(2)}%`;
   return (
     <label className="block">
       <div className="flex justify-between items-baseline">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-muted tabular-nums">{display}</span>
+        <span className="text-[13px] font-medium text-ink">{label}</span>
+        <span className="text-[12px] text-muted tabular-nums">{display}</span>
       </div>
       <input
         type="range"
@@ -35,9 +38,10 @@ export function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full mt-1"
+        className="glass-range mt-1.5"
+        style={{ ["--fill" as string]: fill }}
       />
-      {hint && <p className="text-[11px] text-muted mt-1">{hint}</p>}
+      {hint && <p className="text-[11px] text-muted mt-1 leading-4">{hint}</p>}
     </label>
   );
 }

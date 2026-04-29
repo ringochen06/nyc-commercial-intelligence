@@ -293,24 +293,29 @@ export default function RankingPage() {
 
   if (!ranges) {
     return (
-      <div className="text-sm text-muted">
+      <div className="glass-card p-6 text-sm text-muted">
         {error ? `Error: ${error}` : "Loading…"}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-ink">Ranking</h1>
-        <p className="text-sm text-muted mt-1">
-          Hard filters (DuckDB SQL), then α·semantic + β·competitive penalty
-          (MinMax on the filtered set). Cluster columns appear when you have run
-          K-Selection Analysis on the home page (saved to your browser).
+    <div className="space-y-8">
+      <header className="space-y-2">
+        <p className="text-[12px] uppercase tracking-[0.18em] text-muted font-medium">
+          Step 2
         </p>
-      </div>
+        <h1 className="text-3xl md:text-4xl font-semibold text-ink tracking-tightish">
+          Ranking
+        </h1>
+        <p className="text-[14px] leading-6 text-muted max-w-2xl">
+          Apply deterministic SQL filters, then blend semantic similarity with a
+          competition penalty. Cluster columns appear once you&rsquo;ve run
+          K-Selection on the home page.
+        </p>
+      </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
         <aside className="space-y-5">
           <SectionCard title="Hard Filters">
             <div className="space-y-4">
@@ -439,16 +444,17 @@ export default function RankingPage() {
           </SectionCard>
 
           <SectionCard title="Soft Preferences">
-            <div className="space-y-3">
+            <div className="space-y-4">
               <textarea
-                className="w-full border rounded p-2 text-sm"
+                className="glass-input"
                 rows={4}
                 value={draftQuery}
                 onChange={(e) => setDraftQuery(e.target.value)}
+                placeholder="Describe your ideal neighborhood…"
               />
               <button
                 onClick={() => setCommittedQuery(draftQuery)}
-                className="bg-ink text-white px-3 py-1.5 rounded text-sm"
+                className="btn-primary"
               >
                 Update soft ranking
               </button>
@@ -462,11 +468,11 @@ export default function RankingPage() {
                 format={(v) => `α=${v.toFixed(2)}, β=${(1 - v).toFixed(2)}`}
               />
               <div>
-                <div className="text-sm font-medium mb-1">
+                <div className="text-[13px] font-medium text-ink mb-2">
                   Competitive score source
                 </div>
                 <select
-                  className="w-full border rounded px-2 py-1 text-sm"
+                  className="glass-select"
                   value={competitiveSource}
                   onChange={(e) => setCompetitiveSource(e.target.value)}
                 >
@@ -488,20 +494,20 @@ export default function RankingPage() {
 
           <SectionCard title="Cluster context">
             {cluster.k ? (
-              <p className="text-xs text-muted">
-                Using clusters from your last K-Selection run (k = {cluster.k},
+              <p className="text-[13px] text-muted leading-5">
+                Using clusters from your last K-Selection run (k = {cluster.k},{" "}
                 {Object.keys(cluster.assignments).length} neighborhoods).
                 <button
-                  className="ml-2 underline"
+                  className="ml-2 underline underline-offset-2 hover:text-ink"
                   onClick={() => cluster.clear()}
                 >
                   clear
                 </button>
               </p>
             ) : (
-              <p className="text-xs text-muted">
+              <p className="text-[13px] text-muted leading-5">
                 No clustering on file. Run{" "}
-                <a className="underline" href="/">
+                <a className="underline underline-offset-2 hover:text-ink" href="/k-selection">
                   K-Selection
                 </a>{" "}
                 to fill cluster columns.
@@ -512,11 +518,7 @@ export default function RankingPage() {
 
         <div className="space-y-6">
           <SectionCard
-            title={
-              result
-                ? `Ranked neighborhoods (${result.n_filtered} of ${result.n_total})`
-                : "Ranked neighborhoods"
-            }
+            title="Ranked neighborhoods"
             caption={
               loading
                 ? "Computing…"
@@ -524,9 +526,16 @@ export default function RankingPage() {
                   ? `Error: ${error}`
                   : "MinMax([semantic, -competitive score]) on the filtered set, then α·semantic + (1−α)·competitive penalty."
             }
+            actions={
+              result && (
+                <span className="text-[12px] text-muted tabular-nums">
+                  {result.n_filtered} of {result.n_total}
+                </span>
+              )
+            }
           >
             {result && result.rows.length > 0 ? (
-              <div className="overflow-auto max-h-[480px]">
+              <div className="overflow-auto max-h-[520px] -mx-2 px-2">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -535,28 +544,32 @@ export default function RankingPage() {
                       <th>Borough</th>
                       {cluster.k !== null && <th>Cluster</th>}
                       {cluster.k !== null && <th>Cluster description</th>}
-                      <th>Semantic</th>
-                      <th>Specific competitive</th>
-                      <th>Blended</th>
+                      <th className="text-right">Semantic</th>
+                      <th className="text-right">Competitive</th>
+                      <th className="text-right">Blended</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.rows.map((row) => (
                       <tr key={row.neighborhood}>
-                        <td>{row.rank}</td>
-                        <td>{row.neighborhood}</td>
-                        <td>{row.borough || ""}</td>
+                        <td className="text-muted tabular-nums">{row.rank}</td>
+                        <td className="font-medium text-ink">{row.neighborhood}</td>
+                        <td className="text-muted">{row.borough || ""}</td>
                         {cluster.k !== null && (
-                          <td>{row.cluster ?? ""}</td>
+                          <td className="tabular-nums">{row.cluster ?? ""}</td>
                         )}
                         {cluster.k !== null && (
-                          <td className="text-xs text-muted">
+                          <td className="text-[12px] text-muted">
                             {row.cluster_description || ""}
                           </td>
                         )}
-                        <td>{fmt(row.semantic_similarity, 4)}</td>
-                        <td>{fmt(row.specific_competitive_score, 3)}</td>
-                        <td className="font-medium">
+                        <td className="text-right tabular-nums">
+                          {fmt(row.semantic_similarity, 4)}
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {fmt(row.specific_competitive_score, 3)}
+                        </td>
+                        <td className="text-right tabular-nums font-semibold text-ink">
                           {fmt(row.blended_score, 4)}
                         </td>
                       </tr>
@@ -583,22 +596,23 @@ export default function RankingPage() {
           )}
 
           <SectionCard
-            title="AI analysis (Claude)"
-            caption="Optional. Server must have ANTHROPIC_API_KEY set."
+            title="AI analysis"
+            caption="Claude reads the filtered table and recommends top picks. Requires ANTHROPIC_API_KEY on the server."
           >
             <button
               onClick={askClaude}
               disabled={agentLoading}
-              className="bg-ink text-white px-3 py-1.5 rounded text-sm disabled:opacity-50"
+              className="btn-primary"
             >
-              {agentLoading ? "Asking Claude…" : "Ask Claude to analyze"}
+              {agentLoading ? "Asking Claude…" : "Ask Claude to analyse"}
             </button>
-            {agentError && (
-              <p className="text-sm text-red-600 mt-3">{agentError}</p>
-            )}
+            {agentError && <p className="pill-error mt-3 inline-block">{agentError}</p>}
             {agentAnswer && (
-              <div className="mt-3 bg-slate-50 p-3 rounded border border-slate-200">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+              <div className="mt-4 glass-card-tight p-4">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={MARKDOWN_COMPONENTS}
+                >
                   {agentAnswer}
                 </ReactMarkdown>
               </div>
@@ -606,7 +620,7 @@ export default function RankingPage() {
           </SectionCard>
 
           <SectionCard title="Generated SQL" caption="DuckDB query against `neighborhoods`.">
-            <pre className="text-xs bg-slate-50 p-3 rounded border border-slate-200 overflow-auto">
+            <pre className="text-[12px] leading-5 bg-slate-900/95 text-slate-100 rounded-xl p-4 overflow-auto font-mono">
               {result?.sql || "—"}
             </pre>
           </SectionCard>

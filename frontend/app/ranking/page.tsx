@@ -13,12 +13,77 @@ import { MultiSelect } from "@/components/MultiSelect";
 import { PlotlyChart } from "@/components/PlotlyChart";
 import { SectionCard } from "@/components/SectionCard";
 import { Slider } from "@/components/Slider";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const DEFAULT_QUERY =
   "quiet residential area suitable for boutique retail with good subway access";
 
 const fmt = (v: number | null | undefined, digits: number): string =>
   typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—";
+
+const MARKDOWN_COMPONENTS: Components = {
+  h1: (props) => <h1 className="text-base font-semibold mt-4 mb-2 first:mt-0" {...props} />,
+  h2: (props) => <h2 className="text-sm font-semibold mt-4 mb-2 first:mt-0" {...props} />,
+  h3: (props) => <h3 className="text-sm font-semibold mt-3 mb-1.5 first:mt-0" {...props} />,
+  p: (props) => <p className="text-sm leading-6 my-2 first:mt-0 last:mb-0" {...props} />,
+  ul: (props) => <ul className="list-disc pl-5 my-2 space-y-1 text-sm" {...props} />,
+  ol: (props) => <ol className="list-decimal pl-5 my-2 space-y-1 text-sm" {...props} />,
+  li: (props) => <li className="leading-6" {...props} />,
+  strong: (props) => <strong className="font-semibold" {...props} />,
+  em: (props) => <em className="italic" {...props} />,
+  a: (props) => (
+    <a
+      className="text-blue-700 underline underline-offset-2"
+      target="_blank"
+      rel="noreferrer"
+      {...props}
+    />
+  ),
+  blockquote: (props) => (
+    <blockquote
+      className="border-l-2 border-slate-300 pl-3 my-2 text-slate-700"
+      {...props}
+    />
+  ),
+  code: ({ className, children, ...props }) => {
+    const isBlock = /language-/.test(className ?? "");
+    if (isBlock) {
+      return (
+        <code className={`${className ?? ""} text-xs`} {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className="bg-slate-200 text-slate-900 rounded px-1 py-0.5 text-[0.8rem] font-mono"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  pre: (props) => (
+    <pre
+      className="bg-slate-900 text-slate-100 rounded p-3 my-3 overflow-x-auto text-xs"
+      {...props}
+    />
+  ),
+  table: (props) => (
+    <div className="overflow-x-auto my-3">
+      <table className="text-xs border-collapse" {...props} />
+    </div>
+  ),
+  th: (props) => (
+    <th
+      className="border border-slate-300 px-2 py-1 bg-slate-100 text-left font-semibold"
+      {...props}
+    />
+  ),
+  td: (props) => <td className="border border-slate-300 px-2 py-1 align-top" {...props} />,
+  hr: () => <hr className="my-3 border-slate-200" />,
+};
 
 export default function RankingPage() {
   const [ranges, setRanges] = useState<FeatureRangesResponse | null>(null);
@@ -532,9 +597,11 @@ export default function RankingPage() {
               <p className="text-sm text-red-600 mt-3">{agentError}</p>
             )}
             {agentAnswer && (
-              <pre className="mt-3 whitespace-pre-wrap text-sm bg-slate-50 p-3 rounded border border-slate-200">
-                {agentAnswer}
-              </pre>
+              <div className="mt-3 bg-slate-50 p-3 rounded border border-slate-200">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+                  {agentAnswer}
+                </ReactMarkdown>
+              </div>
             )}
           </SectionCard>
 

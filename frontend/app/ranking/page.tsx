@@ -422,7 +422,7 @@ export default function RankingPage() {
         data={[trace]}
         layout={{
           height: 480,
-          margin: { l: 0, r: 0, t: 8, b: 0 },
+          margin: { l: 0, r: 80, t: 8, b: 0 },
           mapbox: {
             style: "open-street-map",
             center: { lat: geo.center.lat, lon: geo.center.lon },
@@ -800,6 +800,7 @@ export default function RankingPage() {
             <SectionCard
               title="NYC map"
               caption="Blended score (light green = lower, dark green = higher on the filtered set)."
+              className="overflow-hidden"
             >
               {mapPlot}
             </SectionCard>

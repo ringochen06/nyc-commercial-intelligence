@@ -33,6 +33,107 @@ const fmtNum = (v: unknown, digits: number): string => {
   return "—";
 };
 
+// Columns that should be pinned/visible first; everything else follows in CSV order.
+const PRIORITY_COLS = [
+  "neighborhood",
+  "cd",
+  "borough",
+  "storefront_filing_count",
+  "category_diversity",
+  "category_entropy",
+  "avg_pedestrian",
+  "subway_station_count",
+  "commercial_activity_score",
+  "competitive_score",
+  "shooting_incident_count",
+  "nfh_goal4_fin_shocks_score",
+  "nfh_overall_score",
+];
+
+const TEXT_COLS = new Set(["neighborhood", "cd", "borough"]);
+
+function formatCell(col: string, value: unknown): string {
+  if (TEXT_COLS.has(col)) return String(value ?? "");
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return "—";
+    if (Number.isInteger(value)) return value.toLocaleString();
+    if (Math.abs(value) >= 100) return value.toFixed(1);
+    return value.toFixed(3);
+  }
+  return String(value);
+}
+
+function FilteredTable({
+  rows,
+}: {
+  rows: Record<string, number | string | null>[];
+}) {
+  const allCols = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const c of PRIORITY_COLS) {
+      if (rows[0] && c in rows[0]) {
+        seen.add(c);
+        ordered.push(c);
+      }
+    }
+    for (const r of rows) {
+      for (const k of Object.keys(r)) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          ordered.push(k);
+        }
+      }
+    }
+    return ordered;
+  }, [rows]);
+
+  return (
+    <div className="overflow-auto max-h-[480px] -mx-2 px-2">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th className="text-right">#</th>
+            {allCols.map((c) => (
+              <th
+                key={c}
+                className={TEXT_COLS.has(c) ? "" : "text-right"}
+                title={c}
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={`${row.neighborhood ?? i}-${i}`}>
+              <td className="text-right text-muted tabular-nums">{i + 1}</td>
+              {allCols.map((c) => (
+                <td
+                  key={c}
+                  className={
+                    TEXT_COLS.has(c)
+                      ? c === "neighborhood"
+                        ? "font-medium text-ink whitespace-nowrap"
+                        : "text-muted whitespace-nowrap"
+                      : "text-right tabular-nums whitespace-nowrap"
+                  }
+                >
+                  {formatCell(c, row[c])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   h1: (props) => <h1 className="text-base font-semibold mt-4 mb-2 first:mt-0" {...props} />,
   h2: (props) => <h2 className="text-sm font-semibold mt-4 mb-2 first:mt-0" {...props} />,
@@ -150,11 +251,23 @@ export default function RankingPage() {
         setMaxCompetitive(
           r.ranges["competitive_score"] ? r.ranges["competitive_score"].max : 0,
         );
-        setMaxShootingIncident(
-          r.ranges["shooting_incident_count"]
-            ? r.ranges["shooting_incident_count"].max
-            : 0,
-        );
+        const sicRange = r.ranges["shooting_incident_count"];
+        // Hard-filter "Max shooting" defaults to the dataset max so it doesn't
+        // accidentally exclude every CDTA. Warn loudly in the console if the
+        // range is degenerate (column missing or all zeros), since silent
+        // 0..0 sliders look broken in the UI.
+        if (!sicRange) {
+          console.warn(
+            "[ranking] shooting_incident_count missing from /api/feature-ranges",
+            r,
+          );
+        } else if (sicRange.max <= sicRange.min) {
+          console.warn(
+            "[ranking] shooting_incident_count has degenerate range",
+            sicRange,
+          );
+        }
+        setMaxShootingIncident(sicRange ? sicRange.max : 0);
         setMinNfhGoal4(
           r.has_nfh_goal4 && r.ranges["nfh_goal4_fin_shocks_score"]
             ? r.ranges["nfh_goal4_fin_shocks_score"].min
@@ -348,11 +461,22 @@ export default function RankingPage() {
         <aside className="space-y-5">
           <SectionCard
             title="Generated SQL"
-            caption="Live DuckDB query that powers the hard-filtered table below."
+            caption="Live DuckDB query (placeholders replaced with current filter values)."
           >
-            <pre className="text-[11px] leading-5 bg-slate-900/95 text-slate-100 rounded-xl p-3 overflow-auto font-mono whitespace-pre-wrap">
-              {filtered?.sql || (filterError ? `-- error: ${filterError}` : "—")}
-            </pre>
+            <details className="group">
+              <summary className="cursor-pointer text-[12px] text-ink hover:text-accent select-none flex items-center gap-1.5 list-none">
+                <span
+                  aria-hidden
+                  className="inline-block transition-transform group-open:rotate-90"
+                >
+                  ▶
+                </span>
+                View generated SQL
+              </summary>
+              <pre className="mt-3 text-[11px] leading-5 bg-slate-900/95 text-slate-100 rounded-xl p-3 overflow-auto font-mono whitespace-pre-wrap">
+                {filtered?.sql || (filterError ? `-- error: ${filterError}` : "—")}
+              </pre>
+            </details>
           </SectionCard>
 
           <SectionCard title="Hard Filters">
@@ -441,17 +565,37 @@ export default function RankingPage() {
                   format={(v) => v.toFixed(3)}
                 />
               )}
-              {r?.["shooting_incident_count"] && (
-                <Slider
-                  label="Max shooting incident count"
-                  value={maxShootingIncident}
-                  min={r["shooting_incident_count"].min}
-                  max={r["shooting_incident_count"].max}
-                  step={1}
-                  onChange={setMaxShootingIncident}
-                  format={(v) => v.toFixed(0)}
-                />
-              )}
+              {(() => {
+                const sic = r?.["shooting_incident_count"];
+                if (!sic) {
+                  return (
+                    <p className="text-[12px] text-amber-700">
+                      Max shooting incident count: column missing from{" "}
+                      <code>/api/feature-ranges</code>.
+                    </p>
+                  );
+                }
+                if (sic.max <= sic.min) {
+                  return (
+                    <p className="text-[12px] text-amber-700">
+                      Max shooting incident count: degenerate range{" "}
+                      <code>{sic.min}..{sic.max}</code>. Slider hidden — pipeline
+                      probably hasn&rsquo;t ingested the NYPD shooting CSV.
+                    </p>
+                  );
+                }
+                return (
+                  <Slider
+                    label="Max shooting incident count"
+                    value={maxShootingIncident}
+                    min={sic.min}
+                    max={sic.max}
+                    step={1}
+                    onChange={setMaxShootingIncident}
+                    format={(v) => v.toFixed(0)}
+                  />
+                );
+              })()}
               {ranges?.has_nfh_goal4 &&
                 r?.["nfh_goal4_fin_shocks_score"] &&
                 minNfhGoal4 !== null && (
@@ -575,48 +719,7 @@ export default function RankingPage() {
             }
           >
             {filtered && filtered.rows.length > 0 ? (
-              <div className="overflow-auto max-h-[420px] -mx-2 px-2">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th className="text-right">#</th>
-                      <th>Neighborhood</th>
-                      <th>Borough</th>
-                      <th className="text-right">Filings</th>
-                      <th className="text-right">Avg ped.</th>
-                      <th className="text-right">Subway</th>
-                      <th className="text-right">Comm. activity</th>
-                      <th className="text-right">Competitive</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.rows.map((row, i) => (
-                      <tr key={`${row.neighborhood}-${i}`}>
-                        <td className="text-right text-muted tabular-nums">{i + 1}</td>
-                        <td className="font-medium text-ink">
-                          {String(row.neighborhood ?? "")}
-                        </td>
-                        <td className="text-muted">{String(row.borough ?? "")}</td>
-                        <td className="text-right tabular-nums">
-                          {fmtNum(row.storefront_filing_count, 0)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {fmtNum(row.avg_pedestrian, 0)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {fmtNum(row.subway_station_count, 0)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {fmtNum(row.commercial_activity_score, 2)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {fmtNum(row.competitive_score, 3)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <FilteredTable rows={filtered.rows} />
             ) : (
               <p className="text-sm text-muted">
                 {filterError || "No rows match the current filters."}

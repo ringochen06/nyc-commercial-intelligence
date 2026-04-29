@@ -369,6 +369,34 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
     return sql, params
 
 
+def _interpolate_sql(sql: str, params: list) -> str:
+    """Inline ``?`` placeholders with their literal SQL values for display only.
+
+    DuckDB execution still uses the parameterized form; this is purely so the
+    user can read the actual query in the UI instead of '?' placeholders.
+    """
+    parts = sql.split("?")
+    if len(parts) - 1 != len(params):
+        return sql
+    out: list[str] = [parts[0]]
+    for i, value in enumerate(params):
+        if value is None:
+            literal = "NULL"
+        elif isinstance(value, bool):
+            literal = "TRUE" if value else "FALSE"
+        elif isinstance(value, (int,)):
+            literal = str(value)
+        elif isinstance(value, float):
+            literal = f"{int(value)}" if float(value).is_integer() else f"{value:g}"
+        else:
+            # Quote strings, escape embedded single quotes.
+            s = str(value).replace("'", "''")
+            literal = f"'{s}'"
+        out.append(literal)
+        out.append(parts[i + 1])
+    return "".join(out)
+
+
 def _supabase_client():
     """Return a Supabase client if env vars are set, else None. Lazy-imports supabase-py."""
     url = os.getenv("SUPABASE_URL")
@@ -504,7 +532,12 @@ def filter_endpoint(req: FilterRequest) -> FilterResponse:
     con.close()
 
     rows = _clean_for_json(df_filtered.to_dict(orient="records"))
-    return FilterResponse(rows=rows, n_total=len(df_full), n_filtered=len(df_filtered), sql=sql)
+    return FilterResponse(
+        rows=rows,
+        n_total=len(df_full),
+        n_filtered=len(df_filtered),
+        sql=_interpolate_sql(sql, params),
+    )
 
 
 @app.post("/api/rank", response_model=RankResponse)
@@ -617,7 +650,12 @@ def rank(req: RankRequest) -> RankResponse:
             )
         )
 
-    return RankResponse(rows=rows, n_total=len(df_full), n_filtered=len(df_filtered), sql=sql)
+    return RankResponse(
+        rows=rows,
+        n_total=len(df_full),
+        n_filtered=len(df_filtered),
+        sql=_interpolate_sql(sql, params),
+    )
 
 
 def _top5_markdown(rank_resp: RankResponse) -> str:

@@ -103,11 +103,6 @@ export default function HomePage() {
       hint: ranges ? ranges.boroughs.map((b) => b.charAt(0) + b.slice(1).toLowerCase()).join(" · ") : "Loading",
     },
     {
-      label: "Activity categories",
-      value: ranges ? ranges.activity_columns.length.toString() : "—",
-      hint: "act_*_storefront columns",
-    },
-    {
       label: "Numeric features",
       value: numericFeatureCount !== null ? numericFeatureCount.toString() : "—",
       hint: "Filterable in /api/feature-ranges",

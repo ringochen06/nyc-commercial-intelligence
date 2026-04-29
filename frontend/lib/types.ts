@@ -10,12 +10,6 @@ export interface FeatureRange {
 export interface FeatureRangesResponse {
   boroughs: string[];
   ranges: Record<string, FeatureRange>;
-  has_nfh_goal4: boolean;
-  has_nfh_overall: boolean;
-  /** act_*_storefront column names from neighborhood_features_final.csv */
-  activity_columns: string[];
-  /** act_*_density (per-category filing share); mirrors api/schemas.py */
-  density_columns: string[];
 }
 
 export interface ClusterPoint {
@@ -60,8 +54,6 @@ export interface HardFilters {
   min_commercial_activity?: number;
   max_competitive_score?: number;
   max_shooting_incident_count?: number;
-  min_nfh_goal4?: number;
-  min_nfh_overall?: number;
 }
 
 export interface RankRequest {
@@ -69,7 +61,6 @@ export interface RankRequest {
   alpha: number;
   filters: HardFilters;
   vintage: Vintage;
-  competitive_source?: string;
   cluster_assignments?: Record<string, number>;
   cluster_briefs?: Record<string, string>;
 }
@@ -89,6 +80,19 @@ export interface RankRow {
 
 export interface RankResponse {
   rows: RankRow[];
+  n_total: number;
+  n_filtered: number;
+  sql: string;
+}
+
+export interface FilterRequest {
+  filters: HardFilters;
+  vintage: Vintage;
+}
+
+export interface FilterResponse {
+  /** Raw rows from the feature table after hard-filtering. Column shape depends on the CSV. */
+  rows: Record<string, number | string | null>[];
   n_total: number;
   n_filtered: number;
   sql: string;

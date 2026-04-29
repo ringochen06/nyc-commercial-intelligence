@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -76,8 +76,6 @@ class HardFilters(BaseModel):
     min_commercial_activity: float | None = None
     max_competitive_score: float | None = None
     max_shooting_incident_count: float | None = None
-    min_nfh_goal4: float | None = None
-    min_nfh_overall: float | None = None
 
 
 class RankRequest(BaseModel):
@@ -88,7 +86,6 @@ class RankRequest(BaseModel):
         "present",
         description='Feature snapshot. Only "present" is implemented (reads neighborhood_features_final.csv).',
     )
-    competitive_source: str = "__overall__"
     cluster_assignments: dict[str, int] | None = None
     cluster_briefs: dict[str, str] | None = None
 
@@ -113,6 +110,24 @@ class RankResponse(BaseModel):
     sql: str
 
 
+class FilterRequest(BaseModel):
+    filters: HardFilters = HardFilters()
+    vintage: Vintage = Field(
+        "present",
+        description='Feature snapshot. Only "present" is implemented.',
+    )
+
+
+class FilterResponse(BaseModel):
+    rows: list[dict[str, Any]] = Field(
+        ...,
+        description="Hard-filtered rows from the feature table, in CSV column order.",
+    )
+    n_total: int
+    n_filtered: int
+    sql: str
+
+
 class FeatureRange(BaseModel):
     min: float
     max: float
@@ -121,10 +136,3 @@ class FeatureRange(BaseModel):
 class FeatureRangesResponse(BaseModel):
     boroughs: list[str]
     ranges: dict[str, FeatureRange]
-    has_nfh_goal4: bool
-    has_nfh_overall: bool
-    activity_columns: list[str] = Field(..., description="Columns matching act_*_storefront (primary business activity counts).")
-    density_columns: list[str] = Field(
-        ...,
-        description="Columns matching act_*_density (per-category filing share).",
-    )

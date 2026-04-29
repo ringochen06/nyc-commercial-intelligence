@@ -2,6 +2,8 @@ import type {
   CdtaGeoResponse,
   ClusterResponse,
   FeatureRangesResponse,
+  FilterRequest,
+  FilterResponse,
   HealthResponse,
   RankRequest,
   RankResponse,
@@ -61,6 +63,11 @@ export const api = {
     }),
   rank: (body: RankRequest) =>
     request<RankResponse>("/api/rank", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  filter: (body: FilterRequest) =>
+    request<FilterResponse>("/api/filter", {
       method: "POST",
       body: JSON.stringify(body),
     }),

@@ -44,6 +44,8 @@ from api.schemas import (
     ClusterSummary,
     FeatureRange,
     FeatureRangesResponse,
+    FilterRequest,
+    FilterResponse,
     RankRequest,
     RankResponse,
     RankRow,
@@ -55,10 +57,6 @@ from src.embeddings import (  # noqa: E402
     cosine_similarity,
     embed_neighborhood_features,
     embed_texts,
-)
-from src.columns import (  # noqa: E402
-    is_act_density_column,
-    is_act_storefront_column,
 )
 from src.kmeans_numpy import (  # noqa: E402
     compute_inertia,
@@ -189,22 +187,9 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
             if not vals.empty:
                 ranges[col] = FeatureRange(min=float(vals.min()), max=float(vals.max()))
 
-    has_nfh_goal4 = "nfh_goal4_fin_shocks_score" in df.columns and df["nfh_goal4_fin_shocks_score"].notna().any()
-    has_nfh_overall = "nfh_overall_score" in df.columns and df["nfh_overall_score"].notna().any()
-    if has_nfh_goal4:
-        v = pd.to_numeric(df["nfh_goal4_fin_shocks_score"], errors="coerce").dropna()
-        ranges["nfh_goal4_fin_shocks_score"] = FeatureRange(min=float(v.min()), max=float(v.max()))
-    if has_nfh_overall:
-        v = pd.to_numeric(df["nfh_overall_score"], errors="coerce").dropna()
-        ranges["nfh_overall_score"] = FeatureRange(min=float(v.min()), max=float(v.max()))
-
     return FeatureRangesResponse(
         boroughs=sorted(df["borough"].dropna().unique().tolist()),
         ranges=ranges,
-        has_nfh_goal4=has_nfh_goal4,
-        has_nfh_overall=has_nfh_overall,
-        activity_columns=sorted(c for c in df.columns if is_act_storefront_column(c)),
-        density_columns=sorted(c for c in df.columns if is_act_density_column(c)),
     )
 
 
@@ -347,12 +332,6 @@ def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
     if filters.max_shooting_incident_count is not None:
         where.append("shooting_incident_count <= ?")
         params.append(float(filters.max_shooting_incident_count))
-    if filters.min_nfh_goal4 is not None:
-        where.append("nfh_goal4_fin_shocks_score >= ?")
-        params.append(float(filters.min_nfh_goal4))
-    if filters.min_nfh_overall is not None:
-        where.append("nfh_overall_score >= ?")
-        params.append(float(filters.min_nfh_overall))
 
     sql = (
         "SELECT * FROM nbhd WHERE "
@@ -390,8 +369,12 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
             int(req.filters.min_storefront_filings) if req.filters.min_storefront_filings is not None else None
         ),
         "min_commercial_activity": req.filters.min_commercial_activity,
-        "min_nfh_overall_score": req.filters.min_nfh_overall,
-        "min_nfh_goal4_score": req.filters.min_nfh_goal4,
+        "max_competitive_score": req.filters.max_competitive_score,
+        "max_shooting_incident_count": (
+            int(req.filters.max_shooting_incident_count)
+            if req.filters.max_shooting_incident_count is not None
+            else None
+        ),
         "match_count": 200,
     }
     resp = client.rpc("match_neighborhoods", rpc_args).execute()
@@ -401,9 +384,13 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
         return RankResponse(rows=[], n_total=0, n_filtered=0, sql="-- via supabase RPC --")
 
     sims = np.array([float(r["similarity"]) for r in rows_raw], dtype=float)
-    activity = np.array([float(r.get("commercial_activity_score") or 0.0) for r in rows_raw], dtype=float)
+    competitive = np.array(
+        [float(r.get("competitive_score") or 0.0) for r in rows_raw],
+        dtype=float,
+    )
 
-    X = np.column_stack([sims, activity])
+    # Higher competition penalises rank, so negate before MinMax (matches the CSV path).
+    X = np.column_stack([sims, -competitive])
     if X.shape[0] == 1:
         scaled = np.ones((1, 2)) * 0.5
     else:
@@ -429,13 +416,58 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
                 borough=borough,
                 map_key=f"{cd} | {borough}" if cd and borough else None,
                 semantic_similarity=float(sims[idx]),
-                specific_competitive_score=float(activity[idx]),
+                specific_competitive_score=float(competitive[idx]),
                 blended_score=float(final[idx]),
                 cluster=int(cluster_id) if cluster_id is not None else None,
                 cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,
             )
         )
     return RankResponse(rows=out, n_total=len(rows_raw), n_filtered=len(rows_raw), sql="-- via supabase RPC --")
+
+
+def _clean_for_json(rows: list[dict]) -> list[dict]:
+    """Replace NaN / inf with None and downcast numpy scalars so FastAPI can serialise."""
+    out: list[dict] = []
+    for row in rows:
+        clean: dict = {}
+        for k, v in row.items():
+            if isinstance(v, (np.integer,)):
+                clean[k] = int(v)
+            elif isinstance(v, (np.floating, float)):
+                fv = float(v)
+                clean[k] = fv if np.isfinite(fv) else None
+            elif v is pd.NA:
+                clean[k] = None
+            else:
+                try:
+                    if pd.isna(v):
+                        clean[k] = None
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                clean[k] = v
+        out.append(clean)
+    return out
+
+
+@app.post("/api/filter", response_model=FilterResponse)
+def filter_endpoint(req: FilterRequest) -> FilterResponse:
+    """Apply the hard filters via DuckDB and return the raw filtered rows.
+
+    Powers the "Hard-filtered neighborhoods" preview on the Ranking page —
+    independent of the semantic ranking pipeline.
+    """
+    df_full = load_features(req.vintage)
+    boroughs_in_data = sorted(df_full["borough"].dropna().unique().tolist())
+
+    con = duckdb.connect()
+    con.register("nbhd", df_full)
+    sql, params = _build_sql(req.filters, boroughs_in_data)
+    df_filtered = con.execute(sql, params).fetchdf()
+    con.close()
+
+    rows = _clean_for_json(df_filtered.to_dict(orient="records"))
+    return FilterResponse(rows=rows, n_total=len(df_full), n_filtered=len(df_filtered), sql=sql)
 
 
 @app.post("/api/rank", response_model=RankResponse)
@@ -478,35 +510,19 @@ def rank(req: RankRequest) -> RankResponse:
     query_embedding = embed_texts([req.query])[0]
     sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
-    source_col = req.competitive_source
-    if source_col == "__overall__":
-        source_col = "storefront_filing_count"
-    elif not is_act_storefront_column(source_col):
-        raise HTTPException(
-            400,
-            "Invalid competitive_source. Use '__overall__' or an act_*_storefront column.",
-        )
-    if source_col not in df_filtered.columns:
-        raise HTTPException(400, f"Column {source_col} missing from filtered data.")
+    if "competitive_score" not in df_filtered.columns:
+        raise HTTPException(500, "competitive_score column missing from filtered data.")
 
-    counts = np.array(
+    competitive = np.array(
         [
-            float(df_filtered.loc[df_filtered["neighborhood"] == n, source_col].iloc[0])
+            float(df_filtered.loc[df_filtered["neighborhood"] == n, "competitive_score"].iloc[0])
             for n in keep_names
         ],
         dtype=float,
     )
-    ped_scores = np.array(
-        [
-            float(df_filtered.loc[df_filtered["neighborhood"] == n, "avg_pedestrian"].iloc[0])
-            for n in keep_names
-        ],
-        dtype=float,
-    )
-    act_scores = np.log1p(np.maximum(counts / (ped_scores + 1.0), 0.0))
 
     # Higher competition should lower rank, so use the negated competition signal.
-    X = np.column_stack([sim_scores.astype(float), -act_scores])
+    X = np.column_stack([sim_scores.astype(float), -competitive])
     if X.shape[0] == 1:
         scaled = np.ones((1, 2)) * 0.5
     else:
@@ -533,7 +549,7 @@ def rank(req: RankRequest) -> RankResponse:
                 borough=str(borough) if pd.notna(borough) else None,
                 map_key=f"{cd} | {borough}" if pd.notna(cd) and pd.notna(borough) else None,
                 semantic_similarity=float(sim_scores[idx]),
-                specific_competitive_score=float(act_scores[idx]),
+                specific_competitive_score=float(competitive[idx]),
                 blended_score=float(final_scores[idx]),
                 cluster=int(cluster_id) if cluster_id is not None else None,
                 cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,

@@ -265,6 +265,33 @@ export default function KSelectionPage() {
     );
   }, [result]);
 
+  // For each cluster, the points closest to the centroid in z-space (most representative).
+  const closestByCluster = useMemo(() => {
+    const out: Record<number, { neighborhood: string; cd: string | null; distance: number }[]> = {};
+    if (!result) return out;
+    const k = result.chosen_k;
+    const featureCount = result.features.length;
+    for (let c = 0; c < k; c++) out[c] = [];
+    for (const p of result.points) {
+      const c = p.cluster;
+      const centroid = result.centroids_z[c];
+      let sumSq = 0;
+      for (let i = 0; i < featureCount; i++) {
+        const std = result.feature_stds[i] || 1;
+        const z = (p.raw[result.features[i]] - result.feature_means[i]) / std;
+        const diff = z - centroid[i];
+        sumSq += diff * diff;
+      }
+      out[c].push({
+        neighborhood: p.neighborhood,
+        cd: p.cd,
+        distance: Math.sqrt(sumSq),
+      });
+    }
+    for (const c in out) out[c].sort((a, b) => a.distance - b.distance);
+    return out;
+  }, [result]);
+
   const mapPlot = useMemo(() => {
     if (!result || !geo || !geo.geojson.features.length) return null;
     const traces = [];
@@ -450,32 +477,57 @@ export default function KSelectionPage() {
             </SectionCard>
           )}
 
-          <SectionCard title="Cluster summaries">
+          <SectionCard
+            title="Cluster summaries"
+            caption="Each card lists the neighborhoods closest to that cluster's centroid in z-space — the most representative members."
+          >
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {result.cluster_summaries.map((s) => (
-                <div
-                  key={s.cluster}
-                  className="glass-card-tight p-4 flex gap-3"
-                >
-                  <span
-                    aria-hidden
-                    className="mt-1 h-3 w-3 rounded-full shrink-0"
-                    style={{
-                      background: colorForCluster(s.cluster),
-                      boxShadow: `0 0 0 3px ${colorForCluster(s.cluster)}22`,
-                    }}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-ink">
-                      Cluster {s.cluster}
-                      <span className="text-muted font-normal"> · n = {s.size}</span>
-                    </div>
-                    <div className="text-[13px] leading-5 text-muted mt-0.5">
-                      {s.description}
+              {result.cluster_summaries.map((s) => {
+                const closest = (closestByCluster[s.cluster] ?? []).slice(0, 5);
+                return (
+                  <div key={s.cluster} className="glass-card-tight p-4 flex gap-3">
+                    <span
+                      aria-hidden
+                      className="mt-1 h-3 w-3 rounded-full shrink-0"
+                      style={{
+                        background: colorForCluster(s.cluster),
+                        boxShadow: `0 0 0 3px ${colorForCluster(s.cluster)}22`,
+                      }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium text-ink">
+                        Cluster {s.cluster}
+                        <span className="text-muted font-normal"> · n = {s.size}</span>
+                      </div>
+                      <div className="text-[13px] leading-5 text-muted mt-0.5">
+                        {s.description}
+                      </div>
+                      {closest.length > 0 && (
+                        <div className="mt-3">
+                          <div className="text-[11px] uppercase tracking-[0.12em] text-muted font-medium mb-1.5">
+                            Most representative
+                          </div>
+                          <ol className="space-y-1 text-[12px] text-ink/85">
+                            {closest.map((c, i) => (
+                              <li key={c.neighborhood} className="flex items-baseline gap-2">
+                                <span className="text-muted tabular-nums w-4 shrink-0">
+                                  {i + 1}.
+                                </span>
+                                <span className="truncate flex-1" title={c.neighborhood}>
+                                  {c.neighborhood}
+                                </span>
+                                <span className="text-muted text-[11px] tabular-nums shrink-0">
+                                  d={c.distance.toFixed(2)}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </SectionCard>
 

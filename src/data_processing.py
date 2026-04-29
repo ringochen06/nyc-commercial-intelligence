@@ -137,9 +137,10 @@ def clean_pedestrian_data(ped_path: str | Path) -> pd.DataFrame:
         lon = pd.to_numeric(df_ped["longitude"], errors="coerce")
         lat = pd.to_numeric(df_ped["latitude"], errors="coerce")
 
-    ped_cols = [
+    ped_cols_all = [
         col for col in df_ped.columns if "_AM" in col or "_PM" in col or "_MD" in col
     ]
+    ped_cols = [col for col in ped_cols_all if re.search(r"(24)_(?:AM|PM|MD)$", col)]
     if ped_cols:
         avg_ped = df_ped[ped_cols].mean(axis=1)
         peak_ped = df_ped[ped_cols].max(axis=1)
@@ -326,6 +327,7 @@ def clean_storefront_data(storefront_path: str | Path) -> pd.DataFrame:
     act = df["primary_business_activity"].fillna("").astype(str).str.strip()
     act_upper = act.str.upper()
     df["business_activity_category"] = act
+    df.loc[act_upper == "OTHER", "business_activity_category"] = "other"
     df.loc[act_upper == "MISCELLANEOUS OTHER SERVICE", "business_activity_category"] = "other"
     df.loc[act == "", "business_activity_category"] = "UNKNOWN"
 
@@ -547,11 +549,6 @@ def clean_neighborhood_profiles(
         + df["pop_hispanic"].fillna(0)
         + df["pop_asian"].fillna(0)
     )
-
-    denom = df["total_population_proxy"].replace(0, np.nan)
-    df["pct_hispanic"] = df["pop_hispanic"] / denom
-    df["pct_black"] = df["pop_black"] / denom
-    df["pct_asian"] = df["pop_asian"] / denom
 
     if nfh_path is not None and Path(nfh_path).exists():
         nfh = clean_nfh_profiles(nfh_path)

@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from src.config import load_neighborhood_test_features
 import streamlit as st
 from plotly.subplots import make_subplots
 from sklearn.metrics import silhouette_score as sklearn_silhouette_score
@@ -24,7 +23,6 @@ from embeddings import cosine_similarity, load_embeddings  # noqa: E402
 from kmeans_numpy import (
     compute_inertia,
     kmeans,
-    kmeans_with_caching,
     kmeans_plus_plus,
     kmeans_plus_plus_with_caching,
     silhouette_score,
@@ -43,11 +41,16 @@ CANDIDATE_FEATURES: list[str] = [
     "subway_station_count",
     "storefront_density_per_km2",
     "commercial_activity_score",
+    "competitive_score",
+    "shooting_incident_count",
     "transit_activity_score",
     "category_entropy",
     "category_diversity",
     "peak_pedestrian",
     "subway_density_per_km2",
+    "nfh_overall_score",
+    "nfh_goal4_fin_shocks_score",
+    "total_jobs",
 ]
 
 DEFAULT_FEATURES: list[str] = [
@@ -56,8 +59,12 @@ DEFAULT_FEATURES: list[str] = [
     "subway_station_count",
     "storefront_density_per_km2",
     "commercial_activity_score",
+    "competitive_score",
+    "shooting_incident_count",
     "transit_activity_score",
     "category_entropy",
+    "nfh_overall_score",
+    "total_jobs",
 ]
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -77,8 +84,7 @@ st.caption(
 # ── Load data ────────────────────────────────────────────────────────────────
 
 
-# df_full = load_neighborhood_features()
-df_full = load_neighborhood_test_features()
+df_full = load_neighborhood_features()
 
 # ── Sidebar controls ─────────────────────────────────────────────────────────
 
@@ -217,7 +223,6 @@ def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
     """
     if len(k_range) <= 3:
         return k_range[np.argmin(inertias)]
-        # return find_elbow(k_range, inertias)
 
     ys = np.array(inertias, dtype=float)
     local_minima = [
@@ -361,6 +366,8 @@ if st.button("Run K-Selection Analysis", type="primary"):
     st.session_state["ks_elbow_k"] = elbow_k
     st.session_state["ks_elbow_k_kneedle"] = elbow_k_kneedle
     st.session_state["ks_best_sil_k"] = best_sil_k
+    # Default visualization to smallest k in sweep (not an automatic "best").
+    st.session_state["ks_user_k"] = k_range[0]
     st.session_state["ks_X"] = X
     st.session_state["ks_X_raw"] = X_raw
     st.session_state["ks_df_clean"] = df_clean
@@ -383,11 +390,24 @@ if "ks_k_range" in st.session_state:
     features_s: list[str] = st.session_state["ks_features"]
     n_s: int = st.session_state["ks_n"]
 
-    elbow_idx = k_range_s.index(elbow_k)
+    _default_viz_k = st.session_state.get("ks_user_k", k_range_s[0])
+    if _default_viz_k not in k_range_s:
+        _default_viz_k = k_range_s[0]
+    viz_k = st.sidebar.select_slider(
+        "Clusters (k)",
+        options=k_range_s,
+        value=_default_viz_k,
+        help="How many clusters to draw on the charts and export to the Ranking page. "
+        "Elbow / silhouette curves are hints only.",
+        key="ks_viz_k_slider",
+    )
+    st.session_state["ks_user_k"] = viz_k
+
     st.success(
-        f"Primary inertia k (grey line + yellow table row): **k = {elbow_k}**  ·  "
-        f"Kneedle-only k: **k = {elbow_k_kneedle}**  ·  "
-        f"Best silhouette k (sklearn): **k = {best_sil_k}**"
+        f"Heuristic references — inertia elbow (grey line): **k = {elbow_k}** · "
+        f"kneedle: **k = {elbow_k_kneedle}** · "
+        f"best silhouette (sklearn): **k = {best_sil_k}**. "
+        f"Visualizations use **k = {viz_k}** (sidebar)."
     )
 
     # ── Dual-axis Plotly chart ────────────────────────────────────────────────
@@ -434,6 +454,15 @@ if "ks_k_range" in st.session_state:
             annotation_position="top left",
         )
 
+    if viz_k != elbow_k:
+        fig.add_vline(
+            x=viz_k,
+            line_dash="solid",
+            line_color="#ea580c",
+            annotation_text=f"Clusters (k)={viz_k}",
+            annotation_position="bottom right",
+        )
+
     fig.update_xaxes(title_text="k (number of clusters)", tickvals=k_range_s)
     fig.update_yaxes(title_text="Inertia (WCSS)", secondary_y=False)
     fig.update_yaxes(title_text="Silhouette Score", secondary_y=True)
@@ -446,24 +475,19 @@ if "ks_k_range" in st.session_state:
     st.plotly_chart(fig, use_container_width=True)
 
     st.info(
-        "**Grey dashed line** (and the **yellow row** in the results table) = primary **k** from the "
-        "**inertia (WCSS) curve**: among interior *k* where WCSS has a **local minimum** (a dip), pick the "
-        "**lowest WCSS** among those minima; if the curve has **no** interior local minimum, use **kneedle** "
-        "(maximum perpendicular distance from the chord between the first and last points, after scaling "
-        "*k* and WCSS to [0, 1]). If only 2–3 values of *k* are swept, it picks *k* with **minimum WCSS**.  "
-        "**Green dotted line** = kneedle applied the same way, shown only when it differs from the primary.  "
-        "**Silhouette** (red) is a separate cue; **best silhouette k** is another common choice. "
-        "All are **heuristics**—use the *k* you can interpret, not necessarily the highlighted one."
+        "**Grey dashed line** = inertia-based **k** suggestion (local minima / kneedle). "
+        "**Orange line** (when shown) = your sidebar **Clusters (k)** if it differs from grey. "
+        "**Yellow row** in the table matches **Clusters (k)**. "
+        "**Green dotted line** = kneedle when it differs from grey. "
+        "**Silhouette** (red) is a separate cue."
     )
 
     # ── Cluster visualization ─────────────────────────────────────────────────
 
     st.subheader("Cluster Visualization")
 
-    # Single partition: primary inertia k (same as grey line / yellow row). All clusters in that solution are plotted.
-    viz_k = elbow_k
     st.caption(
-        f"Using **k = {viz_k}** (primary inertia suggestion). "
+        f"Partition with **k = {viz_k}** (sidebar). "
         f"Scatter, map, centroid bars, and notes below show all **{viz_k}** clusters."
     )
 
@@ -720,8 +744,8 @@ if "ks_k_range" in st.session_state:
 
     st.subheader("Results table")
     st.caption(
-        "The highlighted row is the **primary inertia suggestion** (same *k* as the grey vertical line on the chart). "
-        "It is **not** a guaranteed best *k*—compare with silhouette and domain judgment."
+        "The **yellow row** matches **Clusters (k)** in the sidebar. "
+        "The grey vertical line is the inertia-only heuristic for comparison."
     )
 
     results_df = pd.DataFrame(
@@ -739,12 +763,12 @@ if "ks_k_range" in st.session_state:
         "border-top: 2px solid #eab308; border-bottom: 2px solid #eab308"
     )
 
-    def highlight_elbow(row: pd.Series) -> list[str]:
-        if row["k"] == elbow_k:
+    def highlight_chosen_k(row: pd.Series) -> list[str]:
+        if row["k"] == viz_k:
             return [_elbow_row_style] * len(row)
         return [""] * len(row)
 
-    styled = results_df.style.apply(highlight_elbow, axis=1).format(
+    styled = results_df.style.apply(highlight_chosen_k, axis=1).format(
         {
             "inertia": "{:,.2f}",
             "silhouette_numpy": "{:.4f}",

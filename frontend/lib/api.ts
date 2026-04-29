@@ -45,14 +45,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResponse>("/api/health"),
-  featureRanges: (vintage: Vintage = "present") =>
-    request<FeatureRangesResponse>(`/api/feature-ranges?vintage=${vintage}`),
+  featureRanges: () => request<FeatureRangesResponse>("/api/feature-ranges?vintage=present"),
   cdtaGeo: () => request<CdtaGeoResponse>("/api/geo/cdta"),
   cluster: (body: {
     features: string[];
     boroughs?: string[];
     max_k: number;
     vintage: Vintage;
+    chosen_k?: number;
     random_state?: number;
   }) =>
     request<ClusterResponse>("/api/cluster", {

@@ -21,13 +21,14 @@ data/raw/**
 !data/raw/nyc_boundaries/.gitkeep
 !data/raw/nyc_boundaries/nycdta2020.*
 
-# Generated outputs (embeddings, cluster HDF5 cache, models, figures) — regenerate locally.
+# Generated outputs (embeddings, cluster HDF5 cache, validation plots, models) — regenerate locally.
 outputs/**
 !outputs/**/
 !outputs/**/.gitkeep
-!outputs/validation/
-!outputs/validation/**
 claude.md
+
+# Stray cluster cache if dev ran Streamlit with cwd under tests/
+tests/outputs/
 
 # Frontend (Next.js / Vercel)
 frontend/node_modules

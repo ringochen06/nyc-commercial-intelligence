@@ -8,7 +8,8 @@ This folder contains cleaned and engineered datasets prepared for downstream ana
 
 ### `ped_clean.csv`
 
-Cleaned point-level pedestrian count dataset.
+Cleaned point-level pedestrian count dataset using only 2024 pedestrian columns
+from the raw bi-annual export.
 
 **Main fields**
 
@@ -76,7 +77,7 @@ Cleaned area-level socioeconomic dataset derived from **NYC Public Neighborhood 
 
 Each row is one **CDTA** (Community District Tabulation Area) polygon from `nycdta2020`. With MOCEJ profiles plus NFH merged, a typical build is **on the order of ~71 rows** (exact column count depends on optional NFH columns and pipeline version).
 
-**Not in this table:** There is **no** `persistence_score` column in the current pipeline; the app blends **semantic similarity** and **`commercial_activity_score`** only (see below).
+**Not in this table:** There is **no** `persistence_score` column in the current pipeline. **Ranking** (Streamlit `pages/Ranking.py` and FastAPI `/api/rank`) blends **semantic similarity** with a **category-specific competitive score** `log1p(count / (avg_pedestrian + 1))` after hard filters — not `commercial_activity_score` alone (see root `README.md`).
 
 **`neighborhood_features_final.csv`** is built from **pedestrian** and **subway** point layers plus **storefront** aggregates (raw storefront CSV is read in `run_feature_engineering`; no `storefront_clean.csv` / `storefront_with_neighborhood.csv`). It includes per-CDTA **`storefront_filing_count`** (non-vacant filings only), **`storefront_density_per_km2`**, **`act_<CATEGORY>_storefront`** counts by primary business activity, and **`category_diversity` / `category_entropy`** derived from those counts. MOCEJ-derived **`pct_hispanic`**, **`pct_black`**, **`pct_asian`** are omitted from this merge (counts remain in **`pop_*`** and **`total_population_proxy`**). **`storefront_features.csv`** holds the storefront-only CDTA table (same storefront columns as merged into the final CSV).
 
@@ -107,7 +108,7 @@ Sources integrated:
 
 **Interaction Features**
 
-- `commercial_activity_score` = **`log1p`**(`storefront_filing_count` × `avg_pedestrian`) (after missing storefront counts are set to 0 and pedestrian averages use **borough median**, then **citywide median**, then **0**; the linear product is clipped at 0 before `log1p`). Used in **`app.py`** after MinMax scaling alongside semantic similarity.
+- `commercial_activity_score` = **`log1p`**(`storefront_filing_count` × `avg_pedestrian`) (after missing storefront counts are set to 0 and pedestrian averages use **borough median**, then **citywide median**, then **0**; the linear product is clipped at 0 before `log1p`). Used for **hard SQL ordering** after filters and as an embedding/profile signal — **not** as the soft blending axis with cosine similarity on the Ranking page (that axis uses **semantic similarity** and **`specific_competitive_score`** from the chosen storefront column).
 - `transit_activity_score` = **`log1p`**(`subway_station_count` × `avg_pedestrian`) with the same pedestrian handling. Both scores are **0** when the inner product is 0 (e.g. no filings or no subway stations, or zero pedestrian signal after imputation).
 
 **Geometry / area**
@@ -125,7 +126,7 @@ Examples: `median_household_income`, `pct_bachelors_plus`, `commute_public_trans
 1. **`python -m src.embeddings`** reads **`neighborhood_features_final.csv`**, builds one text profile per row (`src/embeddings.py`), then embeds with **OpenAI `text-embedding-3-small`** when `OPENAI_API_KEY` is set (and local-only is not forced), otherwise **sentence-transformers**; saves **`neighborhood_embeddings.npy`** (OpenAI) or **`neighborhood_embeddings_st.npy`** (local) plus shared **`neighborhood_texts.npy`**.  
 2. **`streamlit run app.py`** — home is **K-Selection** (`app.py`); open **Ranking** (`pages/Ranking.py`) for filters and blend. Both load the CSV (cached) and embeddings (cached).  
 3. **Ranking page — hard filters:** DuckDB `SELECT` with sidebar thresholds (borough, subway, pedestrian, storefront density, storefront filing count, **`commercial_activity_score`**, etc.).  
-4. **Soft ranking:** On the filtered rows, **MinMaxScaler** is fit on **`[cosine_sim, commercial_activity_score]`**. One blend slider **α**; **β = 1 − α**. Output: **`blended_score`**. Optional **CDTA map** (choropleth by `blended_score`) when embeddings and the shapefile are available.  
+4. **Soft ranking:** On the filtered rows, build **`specific_competitive_score` = `log1p(count / (avg_pedestrian + 1))`** from **`storefront_filing_count`** (`__overall__`) or an **`act_*_storefront`** column. **MinMaxScaler** is fit on **`[cosine_sim, -specific_competitive_score]`** (higher competition lowers rank). One blend slider **α** on cosine similarity; **β = 1 − α** on the negated competition column (same scaling convention as FastAPI `/api/rank`). Output: **`blended_score`**. Optional **CDTA map** (choropleth by **`blended_score`**) when embeddings and the shapefile are available.  
 5. Optional **NFH thresholds** when those columns exist.  
 6. Optional **Claude** panel: read-only SQL on the filtered dataframe (`ANTHROPIC_API_KEY`).
 
@@ -161,11 +162,11 @@ Each CDTA row is turned into one English paragraph (`build_text_profile`), then 
 | `pct_bachelors_plus` | Share with bachelor’s or higher |
 | `commute_public_transit` | Public-transit commute share |
 | `nfh_overall_score`, `nfh_goal4_fin_shocks_score` | NFH composite lines (when present) |
-| **Blended** (Ranking UI only) | **Not** embedded: MinMax on **`[cosine_sim, commercial_activity_score]`** on the filtered rows, then **α·semantic + (1−α)·activity** |
+| **Blended** (Ranking UI only) | **Not** embedded: MinMax on **`[cosine_sim, -specific_competitive_score]`** on the filtered rows (`specific_competitive_score` from **`storefront_filing_count`** or **`act_*_storefront`** vs **`avg_pedestrian`**), then **`blended_score = α·col0 + β·col1`** |
 
 **Example `act_*_storefront` column names** (one row per activity bucket in a typical Open Data export; yours may differ):
 
-`act_ACCOUNTING_SERVICES_storefront`, `act_BROADCASTING_TELECOMM_storefront`, `act_EDUCATIONAL_SERVICES_storefront`, `act_FINANCE_AND_INSURANCE_storefront`, `act_FOOD_SERVICES_storefront`, `act_HEALTH_CARE_OR_SOCIAL_ASSISTANCE_storefront`, `act_INFORMATION_SERVICES_storefront`, `act_LEGAL_SERVICES_storefront`, `act_MANUFACTURING_storefront`, `act_MOVIES_VIDEO_SOUND_storefront`, `act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront`, `act_OTHER_storefront`, `act_PUBLISHING_storefront`, `act_REAL_ESTATE_storefront`, `act_RETAIL_storefront`, `act_UNKNOWN_storefront`, `act_WHOLESALE_storefront`, `act_other_storefront`
+`act_ACCOUNTING_SERVICES_storefront`, `act_BROADCASTING_TELECOMM_storefront`, `act_EDUCATIONAL_SERVICES_storefront`, `act_FINANCE_AND_INSURANCE_storefront`, `act_FOOD_SERVICES_storefront`, `act_HEALTH_CARE_OR_SOCIAL_ASSISTANCE_storefront`, `act_INFORMATION_SERVICES_storefront`, `act_LEGAL_SERVICES_storefront`, `act_MANUFACTURING_storefront`, `act_MOVIES_VIDEO_SOUND_storefront`, `act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront`, `act_PUBLISHING_storefront`, `act_REAL_ESTATE_storefront`, `act_RETAIL_storefront`, `act_UNKNOWN_storefront`, `act_WHOLESALE_storefront`, `act_other_storefront`
 
 The **Ranking** page table and “Soft / embedded columns” reference list these dynamically from `neighborhood_features_final.csv`.
 

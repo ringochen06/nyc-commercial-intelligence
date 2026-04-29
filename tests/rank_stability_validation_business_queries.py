@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 _ROOT = Path(__file__).parent.parent
@@ -12,7 +13,24 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.embeddings import build_all_profiles, cosine_similarity, embed_texts
-from src.ranking import combine_scores
+
+
+def combine_scores(
+    semantic_scores: np.ndarray, competitive_scores: np.ndarray, *, alpha: float
+) -> np.ndarray:
+    """Blend MinMax([semantic, -competitive]) with alpha on semantic."""
+    sims = np.asarray(semantic_scores, dtype=float)
+    comp = np.asarray(competitive_scores, dtype=float)
+    X = np.column_stack([sims, -comp])
+    if X.shape[0] == 1:
+        scaled = np.ones((1, 2)) * 0.5
+    else:
+        mins = X.min(axis=0)
+        spans = X.max(axis=0) - mins
+        spans[spans == 0] = 1.0
+        scaled = (X - mins) / spans
+    beta = 1.0 - float(alpha)
+    return (scaled @ np.array([float(alpha), beta], dtype=float)).astype(float)
 
 # Fixed, externally authored queries aligned to the sector vocabulary of the act_*_storefront
 # categories (food services, retail, health care, educational services, etc.) but phrased as
@@ -97,7 +115,7 @@ def _build_query_ranks(
 ) -> pd.DataFrame:
     q_vec = embed_texts([query])[0]
     sims = cosine_similarity(q_vec, embeddings)
-    act = df["commercial_activity_score"].to_numpy(dtype=float)
+    act = df["competitive_score"].to_numpy(dtype=float)
     blended = combine_scores(sims, act, alpha=alpha)
     out = df[key_cols].copy()
     out[f"cosine_{query_label}"] = sims
@@ -176,8 +194,8 @@ def run_validation(
         if col not in df22.columns or col not in df24.columns:
             raise ValueError(f"Missing key column '{col}' in one of the input files.")
     for df, label in ((df22, "2022"), (df24, "2024")):
-        if "commercial_activity_score" not in df.columns:
-            raise ValueError(f"Missing 'commercial_activity_score' in {label} feature table.")
+        if "competitive_score" not in df.columns:
+            raise ValueError(f"Missing 'competitive_score' in {label} feature table.")
 
     if queries:
         queries = _dedupe_keep_order(queries)
@@ -295,7 +313,7 @@ def main() -> None:
         "--alpha",
         type=float,
         default=0.8,
-        help="Weight on semantic similarity (0–1); commercial activity weight = 1 − alpha.",
+        help="Weight on semantic similarity (0–1); competitive-penalty weight = 1 − alpha.",
     )
     parser.add_argument(
         "--clean-output",

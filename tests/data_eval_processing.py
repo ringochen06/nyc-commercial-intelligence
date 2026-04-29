@@ -7,7 +7,7 @@ pedestrian extracts for 2022 (tests) and 2024 (processed).
 Outputs:
     tests/data/ped_clean_test.csv (point year == 2022 by default)
     tests/data/storefront_features_test.csv (reporting year <= 2022 by default)
-    data/processed/ped_clean_2024.csv (point year == 2024 by default)
+    data/processed/ped_clean.csv (point year == 2024 by default)
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ import numpy as np
 import pandas as pd
 
 from src.data_processing import clean_neighborhood_profiles, standardize_borough
-from src.feature_engineering import build_storefront_features, load_boundaries, spatial_join_points
+from src.feature_engineering import (
+    build_storefront_features,
+    load_boundaries,
+    spatial_join_points,
+)
 
 MAX_YEAR = 2022
 TEST_PED_YEAR = 2022
@@ -106,7 +110,16 @@ def clean_pedestrian_data_eval(
 
     keep_cols = [
         c
-        for c in ["Borough", "Street", "From", "To", "latitude", "longitude", "avg_pedestrian", "peak_pedestrian"]
+        for c in [
+            "Borough",
+            "Street",
+            "From",
+            "To",
+            "latitude",
+            "longitude",
+            "avg_pedestrian",
+            "peak_pedestrian",
+        ]
         if c in df_ped.columns
     ]
     df = df_ped[keep_cols].copy()
@@ -126,7 +139,9 @@ def clean_pedestrian_data_eval(
     df = df[df["avg_pedestrian"].fillna(0) > 0]
 
     mode_label = f"year == {year}" if mode == "exact" else f"year <= {year}"
-    print(f"  Pedestrian columns used ({mode_label}): {len(ped_cols)} of {len(all_ped_cols)}")
+    print(
+        f"  Pedestrian columns used ({mode_label}): {len(ped_cols)} of {len(all_ped_cols)}"
+    )
     if ped_cols:
         print(f"  Earliest: {ped_cols[0]}  Latest: {ped_cols[-1]}")
 
@@ -184,7 +199,9 @@ def clean_storefront_data_eval(
     mask = year_max.apply(lambda y: y is not None and y <= max_year)
     n_before = len(df_raw)
     df_raw = df_raw[mask].copy()
-    print(f"  Storefront rows: {n_before:,} → {len(df_raw):,} after year filter (<= {max_year})")
+    print(
+        f"  Storefront rows: {n_before:,} → {len(df_raw):,} after year filter (<= {max_year})"
+    )
 
     df = df_raw.rename(columns=rename_map).copy()
 
@@ -220,7 +237,10 @@ def clean_storefront_data_eval(
     act = df["primary_business_activity"].fillna("").astype(str).str.strip()
     act_upper = act.str.upper()
     df["business_activity_category"] = act
-    df.loc[act_upper == "MISCELLANEOUS OTHER SERVICE", "business_activity_category"] = "other"
+    df.loc[act_upper == "OTHER", "business_activity_category"] = "other"
+    df.loc[act_upper == "MISCELLANEOUS OTHER SERVICE", "business_activity_category"] = (
+        "other"
+    )
     df.loc[act == "", "business_activity_category"] = "UNKNOWN"
 
     keep = [
@@ -262,47 +282,15 @@ def clean_storefront_data_eval(
     return df.reset_index(drop=True)
 
 
-def enrich_final_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Post-process the merged final features DataFrame.
-
-    1. Adds ``total_poi`` column sourced from ``total_businesses`` (MOCEJ 2016
-       neighborhood profile) so downstream consumers have a stable POI proxy.
-    2. For neighborhoods where storefront data is absent (``storefront_filing_count``
-       is 0 or NaN), fills ``storefront_density_per_km2`` using
-       ``total_poi / area_km2`` so every row has a non-null density estimate.
-    """
-    df = df.copy()
-
-    # total_poi: stable alias for the MOCEJ total-businesses POI proxy
-    if "total_businesses" in df.columns:
-        df["total_poi"] = pd.to_numeric(df["total_businesses"], errors="coerce").fillna(0)
-    else:
-        df["total_poi"] = 0.0
-
-    # Fill storefront_density_per_km2 for neighborhoods with no storefront filings
-    if "storefront_density_per_km2" in df.columns and "area_km2" in df.columns:
-        missing_mask = (
-            df["storefront_filing_count"].fillna(0) == 0
-        ) & (df["area_km2"].fillna(0) > 0)
-        fallback_density = df["total_poi"] / df["area_km2"].replace(0, float("nan"))
-        fallback_filing_count = df["total_poi"]
-        df.loc[missing_mask, "storefront_density_per_km2"] = fallback_density[missing_mask]
-        df.loc[missing_mask, "storefront_filing_count"] = fallback_filing_count[missing_mask]
-        n_filled = int(missing_mask.sum())
-        if n_filled:
-            print(
-                f"  storefront_density_per_km2: filled {n_filled} neighborhoods "
-                "using total_poi / area_km2 (no storefront filings)"
-            )
-
-    return df
-
-
 def run_eval_processing(
-    storefront_path: str | Path = "../data/raw/Storefronts_Reported_Vacant_or_Not_20260424.csv",
+    storefront_path: (
+        str | Path
+    ) = "../data/raw/Storefronts_Reported_Vacant_or_Not_20260424.csv",
     ped_raw_path: str | Path = "../data/raw/Bi-Annual_Pedestrian_Counts.csv",
     nbhd_path: str | Path = "../data/raw/Public - Neighborhood Profiles 2018 - All.csv",
-    nfhd_raw_path: str | Path = "../data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool.xlsx",
+    nfhd_raw_path: (
+        str | Path
+    ) = "../data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool.xlsx",
     boundary_path: str | Path = "../data/raw/nyc_boundaries/nycdta2020.shp",
     output_dir: str | Path = "tests/data",
     max_year: int = MAX_YEAR,
@@ -333,7 +321,7 @@ def run_eval_processing(
         year=processed_ped_year,
         mode="exact",
     )
-    ped_2024_out = processed_output_dir / f"ped_clean_{processed_ped_year}.csv"
+    ped_2024_out = processed_output_dir / "ped_clean.csv"
     ped_2024_df.to_csv(ped_2024_out, index=False)
     print(f"  Written: {ped_2024_out}  ({len(ped_2024_df)} rows)\n")
 

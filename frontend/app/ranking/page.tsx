@@ -8,7 +8,6 @@ import type {
   FeatureRangesResponse,
   HardFilters,
   RankResponse,
-  Vintage,
 } from "@/lib/types";
 import { MultiSelect } from "@/components/MultiSelect";
 import { PlotlyChart } from "@/components/PlotlyChart";
@@ -19,7 +18,6 @@ const DEFAULT_QUERY =
   "quiet residential area suitable for boutique retail with good subway access";
 
 export default function RankingPage() {
-  const [vintage, setVintage] = useState<Vintage>("present");
   const [ranges, setRanges] = useState<FeatureRangesResponse | null>(null);
   const [geo, setGeo] = useState<CdtaGeoResponse | null>(null);
 
@@ -30,6 +28,8 @@ export default function RankingPage() {
   const [minDensity, setMinDensity] = useState(0);
   const [minFilings, setMinFilings] = useState(0);
   const [minCommercial, setMinCommercial] = useState(0);
+  const [maxCompetitive, setMaxCompetitive] = useState(0);
+  const [maxShootingIncident, setMaxShootingIncident] = useState(0);
   const [minNfhGoal4, setMinNfhGoal4] = useState<number | null>(null);
   const [minNfhOverall, setMinNfhOverall] = useState<number | null>(null);
 
@@ -37,6 +37,7 @@ export default function RankingPage() {
   const [draftQuery, setDraftQuery] = useState(DEFAULT_QUERY);
   const [committedQuery, setCommittedQuery] = useState(DEFAULT_QUERY);
   const [alpha, setAlpha] = useState(0.8);
+  const [competitiveSource, setCompetitiveSource] = useState<string>("__overall__");
 
   const [result, setResult] = useState<RankResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -51,7 +52,7 @@ export default function RankingPage() {
 
   useEffect(() => {
     api
-      .featureRanges(vintage)
+      .featureRanges()
       .then((r) => {
         setRanges(r);
         setBoroughs(r.boroughs);
@@ -64,6 +65,14 @@ export default function RankingPage() {
         setMinDensity(init("storefront_density_per_km2"));
         setMinFilings(init("storefront_filing_count"));
         setMinCommercial(init("commercial_activity_score"));
+        setMaxCompetitive(
+          r.ranges["competitive_score"] ? r.ranges["competitive_score"].max : 0,
+        );
+        setMaxShootingIncident(
+          r.ranges["shooting_incident_count"]
+            ? r.ranges["shooting_incident_count"].max
+            : 0,
+        );
         setMinNfhGoal4(
           r.has_nfh_goal4 && r.ranges["nfh_goal4_fin_shocks_score"]
             ? r.ranges["nfh_goal4_fin_shocks_score"].min
@@ -76,7 +85,7 @@ export default function RankingPage() {
         );
       })
       .catch((e) => setError(e.message));
-  }, [vintage]);
+  }, []);
 
   useEffect(() => {
     api.cdtaGeo().then(setGeo).catch(() => {});
@@ -90,6 +99,8 @@ export default function RankingPage() {
       min_storefront_density: minDensity,
       min_storefront_filings: minFilings,
       min_commercial_activity: minCommercial,
+      max_competitive_score: maxCompetitive,
+      max_shooting_incident_count: maxShootingIncident,
       min_nfh_goal4: minNfhGoal4 ?? undefined,
       min_nfh_overall: minNfhOverall ?? undefined,
     }),
@@ -100,6 +111,8 @@ export default function RankingPage() {
       minDensity,
       minFilings,
       minCommercial,
+      maxCompetitive,
+      maxShootingIncident,
       minNfhGoal4,
       minNfhOverall,
     ],
@@ -116,7 +129,8 @@ export default function RankingPage() {
         query: committedQuery,
         alpha,
         filters,
-        vintage,
+        vintage: "present",
+        competitive_source: competitiveSource,
         cluster_assignments: cluster.assignments,
         cluster_briefs: cluster.briefs,
       })
@@ -133,7 +147,7 @@ export default function RankingPage() {
     filters,
     alpha,
     committedQuery,
-    vintage,
+    competitiveSource,
     cluster.assignments,
     cluster.briefs,
   ]);
@@ -149,7 +163,8 @@ export default function RankingPage() {
         query: committedQuery,
         alpha,
         filters,
-        vintage,
+        vintage: "present",
+        competitive_source: competitiveSource,
         cluster_assignments: cluster.assignments,
         cluster_briefs: cluster.briefs,
       });
@@ -219,7 +234,7 @@ export default function RankingPage() {
       <div>
         <h1 className="text-2xl font-bold text-ink">Ranking</h1>
         <p className="text-sm text-muted mt-1">
-          Hard filters (DuckDB SQL), then α·semantic + β·commercial activity
+          Hard filters (DuckDB SQL), then α·semantic + β·competitive penalty
           (MinMax on the filtered set). Cluster columns appear when you have run
           K-Selection Analysis on the home page (saved to your browser).
         </p>
@@ -229,26 +244,6 @@ export default function RankingPage() {
         <aside className="space-y-5">
           <SectionCard title="Hard Filters">
             <div className="space-y-4">
-              <div>
-                <div className="text-sm font-medium mb-1">Data vintage</div>
-                <div className="flex gap-2">
-                  {(["present", "past"] as Vintage[]).map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setVintage(v)}
-                      className={
-                        "text-xs px-3 py-1 rounded border " +
-                        (vintage === v
-                          ? "bg-ink text-white border-ink"
-                          : "bg-white text-ink border-slate-300")
-                      }
-                    >
-                      {v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <MultiSelect
                 label="Borough"
                 options={ranges.boroughs}
@@ -296,23 +291,52 @@ export default function RankingPage() {
               )}
               {r?.["commercial_activity_score"] && (
                 <Slider
-                  label="Min commercial activity"
+                  label="Min commercial activity score"
                   value={minCommercial}
                   min={r["commercial_activity_score"].min}
                   max={r["commercial_activity_score"].max}
+                  step={Math.max(
+                    0.001,
+                    Math.min(
+                      0.5,
+                      (r["commercial_activity_score"].max -
+                        r["commercial_activity_score"].min) /
+                        200,
+                    ),
+                  )}
+                  onChange={setMinCommercial}
+                  format={(v) => v.toFixed(3)}
+                />
+              )}
+              {r?.["competitive_score"] && (
+                <Slider
+                  label="Max competitive score"
+                  value={maxCompetitive}
+                  min={r["competitive_score"].min}
+                  max={r["competitive_score"].max}
                   step={
                     Math.max(
                       0.001,
                       Math.min(
                         0.5,
-                        (r["commercial_activity_score"].max -
-                          r["commercial_activity_score"].min) /
+                        (r["competitive_score"].max - r["competitive_score"].min) /
                           200,
                       ),
                     )
                   }
-                  onChange={setMinCommercial}
+                  onChange={setMaxCompetitive}
                   format={(v) => v.toFixed(3)}
+                />
+              )}
+              {r?.["shooting_incident_count"] && (
+                <Slider
+                  label="Max shooting incident count"
+                  value={maxShootingIncident}
+                  min={r["shooting_incident_count"].min}
+                  max={r["shooting_incident_count"].max}
+                  step={1}
+                  onChange={setMaxShootingIncident}
+                  format={(v) => v.toFixed(0)}
                 />
               )}
               {ranges.has_nfh_goal4 &&
@@ -367,6 +391,28 @@ export default function RankingPage() {
                 onChange={setAlpha}
                 format={(v) => `α=${v.toFixed(2)}, β=${(1 - v).toFixed(2)}`}
               />
+              <div>
+                <div className="text-sm font-medium mb-1">
+                  Competitive score source
+                </div>
+                <select
+                  className="w-full border rounded px-2 py-1 text-sm"
+                  value={competitiveSource}
+                  onChange={(e) => setCompetitiveSource(e.target.value)}
+                >
+                  <option value="__overall__">
+                    Overall (all storefront filings)
+                  </option>
+                  {ranges.activity_columns.map((col) => (
+                    <option key={col} value={col}>
+                      {col
+                        .replace(/^act_/, "")
+                        .replace(/_storefront$/, "")
+                        .replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </SectionCard>
 
@@ -406,7 +452,7 @@ export default function RankingPage() {
                 ? "Computing…"
                 : error
                   ? `Error: ${error}`
-                  : "MinMax([semantic, commercial activity]) on the filtered set, then α·semantic + (1−α)·activity."
+                  : "MinMax([semantic, -competitive score]) on the filtered set, then α·semantic + (1−α)·competitive penalty."
             }
           >
             {result && result.rows.length > 0 ? (
@@ -420,7 +466,7 @@ export default function RankingPage() {
                       {cluster.k !== null && <th>Cluster</th>}
                       {cluster.k !== null && <th>Cluster description</th>}
                       <th>Semantic</th>
-                      <th>Commercial</th>
+                      <th>Specific competitive</th>
                       <th>Blended</th>
                     </tr>
                   </thead>
@@ -439,7 +485,7 @@ export default function RankingPage() {
                           </td>
                         )}
                         <td>{row.semantic_similarity.toFixed(4)}</td>
-                        <td>{row.commercial_activity_score.toFixed(3)}</td>
+                        <td>{row.specific_competitive_score.toFixed(3)}</td>
                         <td className="font-medium">
                           {row.blended_score.toFixed(4)}
                         </td>

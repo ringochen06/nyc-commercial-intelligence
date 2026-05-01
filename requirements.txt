@@ -20,3 +20,6 @@ pydantic>=2.0
 
 # Supabase (used by /api/rank when SUPABASE_URL is set)
 supabase>=2.0
+
+# Powerpoints (used by /api/powerpoint when PPTX_TEMPLATE is set)
+python-pptx>=0.6

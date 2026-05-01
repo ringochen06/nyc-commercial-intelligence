@@ -21,6 +21,32 @@ CLUSTER_PATH = Path("outputs/clusters/")
 
 
 def _save_hdf5_dict(data: dict, path: Path) -> None:
+    """Save a dictionary of arrays and scalars to an HDF5 file, overwriting existing keys.
+
+    Opens the file in append mode (``'a'``), so existing datasets for other
+    keys are preserved. If a key already exists it is deleted before writing,
+    ensuring the stored value is always the most-recent one.  The parent
+    directory is created automatically if it does not exist.
+
+    Parameters
+    ----------
+    data : dict
+        Mapping of string keys to values.  Supported value types:
+        ``np.ndarray``, ``list``, ``tuple`` (converted to ``np.ndarray``),
+        and Python scalars (``str``, ``int``, ``float``, ``bool``).  Any
+        other type is coerced via ``np.array()``.
+    path : Path
+        Filesystem path to the target HDF5 file.  Created if absent.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    ImportError
+        If ``h5py`` is not installed.
+    """
     if h5py is None:
         raise ImportError("h5py is required for cluster caching. pip install h5py")
     path = Path(path)
@@ -40,6 +66,29 @@ def _save_hdf5_dict(data: dict, path: Path) -> None:
 
 
 def _load_hdf5_dict(path: Path) -> dict:
+    """Load all datasets from an HDF5 file into a plain Python dictionary.
+
+    Each top-level key in the HDF5 file becomes a dictionary entry.  Values
+    are read back as NumPy arrays (or scalars for zero-dimensional datasets)
+    via ``dataset[()]``.
+
+    Parameters
+    ----------
+    path : Path
+        Filesystem path to an existing HDF5 file.
+
+    Returns
+    -------
+    dict
+        Mapping of HDF5 dataset names to their NumPy-array contents.
+
+    Raises
+    ------
+    ImportError
+        If ``h5py`` is not installed.
+    FileNotFoundError
+        If the file at ``path`` does not exist.
+    """
     if h5py is None:
         raise ImportError("h5py is required for cluster caching. pip install h5py")
     path = Path(path)
@@ -52,46 +101,50 @@ def _load_hdf5_dict(path: Path) -> dict:
     return data
 
 def _features_hash(features: list[str]) -> str:
-    """Generate a short hash from a sorted list of feature names."""
+    """Generate a short, order-independent hash from a list of feature names.
+
+    Sorts the feature names before hashing so that identical sets provided
+    in different orders produce the same key.  Used as the suffix that
+    distinguishes HDF5 datasets written for different feature selections
+    within the same ``k`` cache file.
+
+    Parameters
+    ----------
+    features : list[str]
+        Feature column names used for a clustering run.
+
+    Returns
+    -------
+    str
+        An 8-character lowercase hexadecimal MD5 digest of the
+        pipe-joined, sorted feature names.
+    """
     sorted_features = sorted(features)
     combined = "|".join(sorted_features)
     return hashlib.md5(combined.encode()).hexdigest()[:8]
 
 def pairwise_squared_euclidean(X: np.ndarray, C: np.ndarray) -> np.ndarray:
-    """Squared Euclidean distances between rows of X (n, d) and rows of C (k, d) -> (n, k)."""
-    return np.linalg.norm(X[:, np.newaxis] - C, axis=2) ** 2
+    """Compute pairwise squared Euclidean distances between two sets of points.
 
+    Uses NumPy broadcasting: expands ``X`` to shape ``(n, 1, d)`` and
+    ``C`` to ``(1, k, d)`` so that the element-wise difference is
+    ``(n, k, d)``; squaring the L2 norm along the feature axis gives
+    the final ``(n, k)`` distance matrix without an explicit Python loop.
 
-def kmeans(
-    X: np.ndarray,
-    k: int,
-    *,
-    max_iter: int = 100,
-    tol: float = 1e-4,
-    random_state: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """
-    Run K-means on rows of X.
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Query points (data matrix).
+    C : np.ndarray, shape (k, d)
+        Reference points (e.g. cluster centroids).
 
     Returns
     -------
-    labels : (n,) int
-    centroids : (k, d)
-    n_iter : number of iterations executed
+    np.ndarray, shape (n, k)
+        ``D[i, j]`` is the squared Euclidean distance from ``X[i]`` to ``C[j]``.
     """
-    n = X.shape[0]
-    rng = np.random.default_rng(random_state)
-    centroids = X[rng.choice(n, size=k, replace=False)]
-    for i in range(max_iter):
-        z = assign_labels(X, centroids)
-        new_centroids = update_centroids(X, z, k, rng)
-        if np.linalg.norm(new_centroids - centroids) < tol:
-            centroids = new_centroids
-            break
-        centroids = new_centroids
+    return np.linalg.norm(X[:, np.newaxis] - C, axis=2) ** 2
 
-    return z, centroids, i + 1
-    
 
 def kmeans_plus_plus(
     X: np.ndarray,
@@ -101,7 +154,41 @@ def kmeans_plus_plus(
     tol: float = 1e-4,
     random_state: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """K-means++ initialization for better convergence. Not used by ``app.py``; standard kmeans is used instead."""
+    """Run K-means with K-means++ centroid initialisation.
+
+    K-means++ selects initial centroids with probability proportional to
+    their squared distance to the nearest already-chosen centroid, reducing
+    the chance of poor convergence compared to random initialisation.
+    After seeding, the algorithm iterates standard assign → recompute steps
+    until either ``max_iter`` is reached or the maximum centroid displacement
+    falls below ``tol``.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Feature matrix of ``n`` data points in ``d``-dimensional space.
+        Should be z-score normalised before passing in.
+    k : int
+        Number of clusters to form.
+    max_iter : int, optional
+        Maximum number of assign–recompute iterations.  Default ``100``.
+    tol : float, optional
+        Convergence threshold on the L2 norm of the centroid shift between
+        successive iterations.  Default ``1e-4``.
+    random_state : int | None, optional
+        Seed for ``np.random.default_rng``.  Pass an integer for
+        reproducible results; ``None`` uses a random seed.
+
+    Returns
+    -------
+    labels : np.ndarray, shape (n,)
+        Integer cluster index (0 to k-1) for each data point.
+    centroids : np.ndarray, shape (k, d)
+        Final centroid coordinates in the z-scored feature space.
+    n_iter : int
+        Number of iterations actually performed (1-indexed; equals
+        ``max_iter`` if convergence was not reached).
+    """
     
     rng = np.random.default_rng(random_state)
     initial_centroid = X[rng.choice(X.shape[0])]
@@ -125,7 +212,6 @@ def kmeans_plus_plus(
 
     return z, centroids, i + 1
     
-
 def kmeans_plus_plus_with_caching(
     features: list[str],
     X: np.ndarray,
@@ -135,7 +221,42 @@ def kmeans_plus_plus_with_caching(
     tol: float = 1e-4,
     random_state: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """K-means++ initialization with caching to avoid recomputation during development."""
+    """Run K-means with K-means++ initialisation, caching results to avoid recomputation.
+
+    Caches results in an HDF5 file per ``k`` (``outputs/clusters/kmeans_k{k}.h5``),
+    with datasets keyed by a hash of the feature names.  On a cache hit the
+    stored labels, centroids, and iteration count are returned immediately
+    without touching ``X``.  On a cache miss, ``kmeans_plus_plus`` is called
+    and the results are persisted before returning.  Multiple feature
+    selections for the same ``k`` coexist within a single HDF5 file.
+
+    Parameters
+    ----------
+    features : list[str]
+        Feature column names used to generate the cache key.  Must match
+        the columns whose values appear (in the same column order) in ``X``.
+    X : np.ndarray, shape (n, d)
+        Feature matrix used for clustering.  Ignored on a cache hit.
+    k : int
+        Number of clusters to form.
+    max_iter : int, optional
+        Maximum assign–recompute iterations passed to ``kmeans_plus_plus``.
+        Default ``100``.
+    tol : float, optional
+        Convergence tolerance passed to ``kmeans_plus_plus``.  Default ``1e-4``.
+    random_state : int | None, optional
+        Random seed passed to ``kmeans_plus_plus``.  Default ``None``.
+
+    Returns
+    -------
+    labels : np.ndarray, shape (n,)
+        Cluster index (0 to k-1) for each data point.
+    centroids : np.ndarray, shape (k, d)
+        Final centroid coordinates.
+    n_iter : int
+        Iterations run by the K-means algorithm, or ``0`` if the result
+        was loaded from cache.
+    """
     CLUSTER_PATH.mkdir(parents=True, exist_ok=True)
     cache_file = CLUSTER_PATH / f"kmeans_k{k}.h5"
     
@@ -151,67 +272,59 @@ def kmeans_plus_plus_with_caching(
     save_kmeans_results(k, features, labels, centroids, n_iter, cache_file)
     return labels, centroids, n_iter
 
-def kmeans_with_caching(
-    features: list[str],
-    X: np.ndarray,
-    k: int,
-    *,
-    max_iter: int = 100,
-    tol: float = 1e-4,
-    random_state: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Run kmeans with caching to avoid recomputation during development.
-    
-    Caches results in HDF5 file per k, with datasets keyed by feature hash.
-    Allows appending results for different feature selections within the same k.
-    
-    Parameters
-    ----------
-    features : list[str]
-        Feature names used for clustering (used to generate cache key).
-    X : np.ndarray
-        Feature matrix (n, d).
-    k : int
-        Number of clusters.
-    max_iter : int
-        Maximum iterations for K-means.
-    tol : float
-        Convergence tolerance.
-    random_state : int | None
-        Random seed for reproducibility.
-    
-    Returns
-    -------
-    labels : np.ndarray
-        Cluster labels (n,).
-    centroids : np.ndarray
-        Cluster centroids (k, d).
-    n_iter : int
-        Number of iterations run (0 if loaded from cache).
-    """
-    CLUSTER_PATH.mkdir(parents=True, exist_ok=True)
-    cache_file = CLUSTER_PATH / f"kmeans_k{k}.h5"
-    
-    # Try to load from cache
-    try:
-        labels, centroids, iterations = load_kmeans_results(k, features, cache_file)
-        return labels, centroids, 0  # 0 iterations indicates loaded from cache
-    except (FileNotFoundError, KeyError):
-        pass  # Cache miss, proceed with computation
-    
-    # Compute new results
-    labels, centroids, n_iter = kmeans(X, k, max_iter=max_iter, tol=tol, random_state=random_state)
-    save_kmeans_results(k, features, labels, centroids, n_iter, cache_file)
-    return labels, centroids, n_iter
 
 def assign_labels(X: np.ndarray, centroids: np.ndarray) -> np.ndarray:
-    """Assign each row of X to nearest centroid index (0 to k-1) based on squared Euclidean distance. Labels should be shape (n,)."""
+    """Assign each data point to its nearest centroid.
+
+    Computes the full ``(n, k)`` pairwise squared-Euclidean distance matrix
+    via ``pairwise_squared_euclidean``, then takes the column-wise argmin to
+    produce a hard cluster assignment for every point.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Data points to assign.
+    centroids : np.ndarray, shape (k, d)
+        Current centroid positions.
+
+    Returns
+    -------
+    np.ndarray, shape (n,), dtype int
+        Cluster index in ``[0, k)`` for each row of ``X``.
+    """
     distances = pairwise_squared_euclidean(X, centroids)
     return np.argmin(distances, axis=1)
 
 
 def update_centroids(X: np.ndarray, labels: np.ndarray, k: int, rng: np.random.Generator | None = None) -> np.ndarray:
-    """Recompute centroids as mean of assigned points; empty clusters need a policy (e.g. reinit)."""
+    """Recompute cluster centroids as the mean of their assigned points.
+
+    Uses a binary indicator matrix of shape ``(k, n)`` for a vectorised
+    sum-then-divide rather than a Python loop over clusters.  Empty clusters
+    (which can arise in degenerate configurations) are re-initialised to a
+    randomly selected data point so that ``k`` centroids are always returned
+    and downstream steps never encounter NaN means.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Full data matrix.
+    labels : np.ndarray, shape (n,)
+        Cluster assignments produced by ``assign_labels``.
+    k : int
+        Total number of clusters, including any that may be empty.
+    rng : np.random.Generator | None, optional
+        NumPy random generator used to sample replacement points for empty
+        clusters.  A new generator with an arbitrary seed is created
+        internally when ``None``.
+
+    Returns
+    -------
+    np.ndarray, shape (k, d)
+        Updated centroid coordinates.  Each row is either the mean of all
+        points assigned to that cluster or a randomly chosen data point if
+        the cluster was empty.
+    """
     indicator = np.array([labels == j for j in range(k)], dtype=float)  # (k, n)
     counts = np.sum(indicator, axis=1)  # (k,)
     empty = np.where(counts == 0)[0]
@@ -226,103 +339,134 @@ def update_centroids(X: np.ndarray, labels: np.ndarray, k: int, rng: np.random.G
 
 
 
-def minibatch_kmeans(
-    X: np.ndarray,
-    k: int,
-    tol: float = 1e-4,
-    random_state: int | None = None,
-    batch_size: int = 100,
-    learning_rate: float = 0.1,
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Mini-batch K-means (optional extension). Not used by ``app.py``; full batch ``kmeans`` is used instead."""
-    raise NotImplementedError(
-        "minibatch_kmeans is not implemented; use kmeans() or implement this for large-scale data."
-    )
 
 
 def compute_inertia(X: np.ndarray, labels: np.ndarray, centroids: np.ndarray) -> float:
-    """Within-cluster sum of squared distances (WCSS / inertia)."""
+    """Compute within-cluster sum of squared distances (WCSS / inertia).
+
+    Uses advanced indexing (``centroids[labels]``) to gather each point's
+    assigned centroid in a single vectorised operation, then sums the
+    element-wise squared differences across all points and features.
+    Lower inertia indicates tighter, more compact clusters.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Data matrix.
+    labels : np.ndarray, shape (n,)
+        Cluster assignment for each point (output of ``assign_labels``).
+    centroids : np.ndarray, shape (k, d)
+        Current centroid positions.
+
+    Returns
+    -------
+    float
+        Total within-cluster sum of squared Euclidean distances.
+    """
     return float(np.sum((X - centroids[labels]) ** 2))
 
 
 def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
-    """Mean silhouette coefficient over all samples (pure NumPy).
+    """Compute the mean silhouette coefficient over all samples (pure NumPy).
 
-    s(i) = (b(i) - a(i)) / max(a(i), b(i))
+    The silhouette coefficient for sample ``i`` is defined as::
 
-    where a(i) is the mean intra-cluster distance and b(i) is the mean
-    distance to the nearest other cluster.  Returns 0.0 for singleton
-    clusters and when there is only one cluster.
+        s(i) = (b(i) - a(i)) / max(a(i), b(i))
+
+    where ``a(i)`` is the mean Euclidean distance from ``i`` to every other
+    point in the same cluster (intra-cluster cohesion) and ``b(i)`` is the
+    mean distance from ``i`` to every point in the nearest neighbouring
+    cluster (inter-cluster separation).  A score near ``+1`` means the
+    sample is well inside its own cluster; a score near ``-1`` means it
+    would fit better in another cluster; ``0`` indicates overlap.
+
+    The full ``(n, n)`` pairwise distance matrix is precomputed once via
+    broadcasting and reused for all per-sample lookups.  Singleton clusters
+    (only one point) receive ``a(i) = 0``; if the denominator is zero the
+    coefficient is set to ``0.0`` to avoid division by zero.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n, d)
+        Data matrix (same space used for clustering).
+    labels : np.ndarray, shape (n,)
+        Cluster assignment for each point.
+
+    Returns
+    -------
+    float
+        Mean silhouette coefficient across all ``n`` samples, in ``[-1, 1]``.
+        Returns ``0.0`` when fewer than two distinct clusters are present.
     """
-    # Extract total number of data points
     n = X.shape[0]
-    # Get list of unique cluster labels present in the labels array
     unique_labels = np.unique(labels)
-    # Guard: silhouette is undefined for single-cluster or empty clustering
     if len(unique_labels) < 2:
         return 0.0
 
-    # Compute pairwise Euclidean distances: diff shape is (n, n, d)
-    # where diff[i, j, :] is the vector difference X[i] - X[j]
-    diff = X[:, np.newaxis, :] - X[np.newaxis, :, :]# (n, n, d)
-    # Take L2 norm along feature dimension to get (n, n) distance matrix
-    # D[i, j] = Euclidean distance from sample i to sample j
-    D = np.sqrt(np.sum(diff ** 2, axis=2))             # (n, n)
+    diff = X[:, np.newaxis, :] - X[np.newaxis, :, :]
+    D = np.sqrt(np.sum(diff ** 2, axis=2))
 
-    # Initialize silhouette coefficient array for each sample
     s = np.zeros(n)
-    # Loop through each sample to compute its silhouette coefficient
     for i in range(n):
-        # Retrieve the cluster label for the current sample i
         c = labels[i]
-        # Create boolean mask: True where labels match sample i's cluster
         same_mask = labels == c
-        # Exclude sample i itself (we don't measure distance to self)
         same_mask[i] = False
-        # Count how many other samples share the same cluster as i
         cluster_size = np.sum(same_mask)
 
-        # Compute a(i): mean distance to samples in the same cluster
-        # Use D[i, same_mask] to index row i at columns where same_mask is True
-        # .mean() computes the average; if cluster_size == 0 (sample is alone), set a(i) = 0
         a_i = D[i, same_mask].mean() if cluster_size > 0 else 0.0
 
-        # Compute b(i): minimum mean distance to samples in any other cluster
-        # Initialize to infinity (any real value will be smaller)
         b_i = np.inf
-        # Iterate through all unique clusters (to consider each as a "nearest neighbor cluster")
         for c_other in unique_labels:
-            # Skip the sample's own cluster (we already computed a(i) for that)
             if c_other == c:
                 continue
-            # Create boolean mask: True where labels belong to cluster c_other
             other_mask = labels == c_other
-            # Compute mean distance from sample i to all samples in cluster c_other
             mean_dist = D[i, other_mask].mean()
-            # Track the minimum mean distance across all other clusters;
-            # this is the distance to the "nearest neighboring cluster"
             if mean_dist < b_i:
                 b_i = mean_dist
 
-        # Compute denominator for silhouette formula: max(a(i), b(i))
-        # This ensures the coefficient is always in [-1, 1]
         denom = max(a_i, b_i)
-        # Compute silhouette coefficient: s(i) = (b(i) - a(i)) / max(a(i), b(i))
-        # Numerator (b(i) - a(i)) is positive when sample is closer to its own cluster
-        # (i.e., a(i) < b(i), which means tight clusters and good separation)
-        # If denom is 0 (sample is isolated), set s(i) = 0 to avoid division by zero
         s[i] = (b_i - a_i) / denom if denom > 0 else 0.0
 
-    # Return the mean silhouette coefficient across all samples
     return float(np.mean(s))
 
 
 
 def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, n_iterations: int, path: Path | str) -> None:
-    """Persist clustering results to HDF5 file with features-based key.
-    
-    Each feature selection is stored as a separate dataset group in the same k file,
-    allowing multiple feature sets to coexist for the same k value.
+    """Persist clustering results to an HDF5 file keyed by feature selection.
+
+    Writes four datasets to the file, each suffixed with an 8-character hash
+    of the sorted ``features`` list so that results for different feature
+    combinations can coexist inside the same ``k``-specific file without
+    collision.  Existing entries for the same feature hash are overwritten.
+
+    Dataset names written (where ``<hash>`` = ``_features_hash(features)``):
+
+    * ``features_<hash>``  — object array of feature name strings
+    * ``labels_<hash>``    — integer cluster-label array
+    * ``centroids_<hash>`` — float centroid matrix
+    * ``n_iterations_<hash>`` — single-element int array holding iteration count
+
+    Parameters
+    ----------
+    k : int
+        Number of clusters (used only to compose the default filename in
+        callers; not written into the file itself).
+    features : list[str]
+        Feature column names that produced these results.  Determines the
+        cache key; order does not matter (names are sorted before hashing).
+    labels : np.ndarray, shape (n,)
+        Cluster assignment for each data point.
+    centroids : np.ndarray, shape (k, d)
+        Final centroid coordinates.
+    n_iterations : int
+        Number of K-means iterations performed.
+    path : Path | str
+        Destination HDF5 file path.  Created if absent; parent directories
+        are created automatically.
+
+    Returns
+    -------
+    None
     """
     path = Path(path) if isinstance(path, str) else path
     feat_key = _features_hash(features)
@@ -335,11 +479,41 @@ def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroi
     }
     _save_hdf5_dict(data, path)
 
-def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[np.ndarray, np.ndarray]:
-    """Load persisted clustering results from HDF5 file by k and features.
-    
-    Returns labels and centroids matching the exact feature set.
-    Raises KeyError if the feature combination is not found in the file.
+def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[np.ndarray, np.ndarray, int]:
+    """Load persisted clustering results from an HDF5 file by ``k`` and feature set.
+
+    Derives the dataset key from ``_features_hash(features)`` and looks up
+    the corresponding ``labels_*``, ``centroids_*``, and ``n_iterations_*``
+    datasets in the file.  The function is the inverse of ``save_kmeans_results``.
+
+    Parameters
+    ----------
+    k : int
+        Number of clusters (informational; used in the error message to aid
+        debugging; not read from the file).
+    features : list[str]
+        Feature column names whose hash identifies the desired result set.
+        Must match the list passed to ``save_kmeans_results`` (order-independent).
+    path : Path | str
+        Path to the HDF5 cache file produced by ``save_kmeans_results``.
+
+    Returns
+    -------
+    labels : np.ndarray, shape (n,)
+        Cluster assignment for each data point.
+    centroids : np.ndarray, shape (k, d)
+        Centroid coordinates.
+    n_iter : int
+        Number of K-means iterations that were performed when the result
+        was originally computed.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the cache file does not exist at ``path``.
+    KeyError
+        If the file exists but contains no entry for the given feature hash
+        (i.e. this feature combination has not been cached yet).
     """
     path = Path(path) if isinstance(path, str) else path
     feat_key = _features_hash(features)
@@ -361,5 +535,3 @@ def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[
     
     return data[labels_key], data[centroids_key], data[iterations_key][0]
 
-
-#kmeans_plus_plus()

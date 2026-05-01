@@ -248,12 +248,13 @@ add_textbox(s, "NYC Commercial Intelligence  ·  2025",
 s = prs.slides.add_slide(blank_layout)
 slide_bg(s)
 slide_header(s, "04  CLUSTERING",
-             "K-Means From Scratch (NumPy)",
+             "K-Means++ From Scratch (NumPy)",
              subtitle="Exploratory tool for discovering neighborhood archetypes")
 
 add_bullet_box(s, "Implementation  (src/kmeans_numpy.py)", [
     "Pure NumPy — no scikit-learn for core algorithm",
     "Z-score normalization before clustering",
+    "Smart seeding based on probability distribution of distances (higher variance points more likely to be chosen)",
     "Euclidean distance, iterative centroid update",
     "Convergence: centroid shift < 1e-4  OR  100 iterations",
     "Empty cluster reinit from random points",
@@ -265,7 +266,9 @@ add_bullet_box(s, "K Selection", [
     "Elbow curve  (inertia / WCSS)",
     "Silhouette score — also from scratch",
     "Auto-detect elbow: perpendicular-distance method",
+    "Ultimately user-selected based on interpretability of clusters",
     "Optional: cluster briefs via embeddings",
+
 ], Inches(0.4), Inches(5.35), Inches(6.0), Inches(1.8), bullet_size=14)
 
 # Right: features used

@@ -504,21 +504,22 @@ def run_feature_engineering(
 
     ped_joined = spatial_join_points(ped, boundary_gdf)
     subway_joined = spatial_join_points(subway, boundary_gdf)
-    if shooting_raw_path is not None and Path(shooting_raw_path).exists():
-        shooting_raw = pd.read_csv(shooting_raw_path, low_memory=False)
-        shooting_joined = spatial_join_points(shooting_raw, boundary_gdf)
-        shooting_feat = build_shooting_features(shooting_joined)
-    else:
-        shooting_feat = area_df[["neighborhood", "cd", "borough"]].copy()
-        shooting_feat["shooting_incident_count"] = 0
+    # if shooting_raw_path is not None and Path(shooting_raw_path).exists():
+    #     shooting_raw = pd.read_csv(shooting_raw_path, low_memory=False)
+    #     shooting_joined = spatial_join_points(shooting_raw, boundary_gdf)
+    #     shooting_feat = build_shooting_features(shooting_joined)
+    # else:
+    #     shooting_feat = area_df[["neighborhood", "cd", "borough"]].copy()
+    #     shooting_feat["shooting_incident_count"] = 0
 
-    if storefront_raw_path is not None and Path(storefront_raw_path).exists():
-        sf_clean = clean_storefront_data(storefront_raw_path)
-        sf_joined = spatial_join_points(sf_clean, boundary_gdf)
-        storefront_feat = build_storefront_features(sf_joined)
-    else:
-        storefront_feat = empty_storefront_features(area_df)
-
+    # if storefront_raw_path is not None and Path(storefront_raw_path).exists():
+    #     sf_clean = clean_storefront_data(storefront_raw_path)
+    #     sf_joined = spatial_join_points(sf_clean, boundary_gdf)
+    #     storefront_feat = build_storefront_features(sf_joined)
+    # else:
+    #     storefront_feat = empty_storefront_features(area_df)
+    storefront_feat = pd.read_csv(output_dir / "storefront_features.csv")
+    shooting_feat = pd.read_csv(output_dir / "shooting_features.csv")
     ped_feat = build_pedestrian_features(ped_joined)
     subway_feat = build_subway_features(subway_joined)
 
@@ -534,8 +535,8 @@ def run_feature_engineering(
     shooting_neighborhood_feat = build_shooting_neighborhood_features(
         shooting_feat, area_df
     )
-    shooting_neighborhood_feat.to_csv(output_dir / "shooting_features.csv", index=False)
-    storefront_feat.to_csv(output_dir / "storefront_features.csv", index=False)
+    # shooting_neighborhood_feat.to_csv(output_dir / "shooting_features.csv", index=False)
+    # storefront_feat.to_csv(output_dir / "storefront_features.csv", index=False)
     final_df.to_csv(output_dir / "neighborhood_features_final.csv", index=False)
 
     return {

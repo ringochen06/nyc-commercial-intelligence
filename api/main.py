@@ -31,11 +31,27 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from api.cluster_helpers import (
+    _cluster_rich_description,
+    _find_cluster_reps,
+    _find_elbow,
+    _find_elbow_curvature_knee,
+    _get_required_features,
+    _zscore,
+)
 from api.loaders import (
     CDTA_GEO_JSON,
     load_cdta_bounds,
     load_cdta_geojson,
     load_features,
+)
+from api.rank_helpers import (
+    _build_sql,
+    _clean_for_json,
+    _interpolate_sql,
+    _rank_via_supabase,
+    _supabase_client,
+    _top5_markdown,
 )
 from api.schemas import (
     ClusterPoint,
@@ -51,8 +67,6 @@ from api.schemas import (
     RankRow,
     Vintage,
 )
-
-# Import wrapped modules.
 from src.embeddings import (  # noqa: E402
     cosine_similarity,
     embed_neighborhood_features,
@@ -66,6 +80,11 @@ from src.kmeans_numpy import (  # noqa: E402
 
 logger = logging.getLogger("api")
 logging.basicConfig(level=logging.INFO)
+
+_EXCLUDED_ACTIVITY_COLUMNS = {
+    "act_NO_BUSINESS_ACTIVITY_IDENTIFIED_storefront",
+    "act_UNKNOWN_storefront",
+}
 
 
 # ── App + CORS ───────────────────────────────────────────────────────────────
@@ -89,61 +108,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _zscore(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    mean = arr.mean(axis=0)
-    std = arr.std(axis=0)
-    return (arr - mean) / (std + 1e-8), mean, std
-
-
-def _find_elbow(k_range: list[int], inertias: list[float]) -> int:
-    ks = np.array(k_range, dtype=float)
-    ys = np.array(inertias, dtype=float)
-    ks_n = (ks - ks.min()) / (ks.max() - ks.min() + 1e-12)
-    ys_n = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
-    dx = ks_n[-1] - ks_n[0]
-    dy = ys_n[-1] - ys_n[0]
-    norm = np.sqrt(dx**2 + dy**2) + 1e-12
-    distances = np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
-    return k_range[int(np.argmax(distances))]
-
-
-def _find_elbow_curvature_knee(k_range: list[int], inertias: list[float]) -> int:
-    """Alternative elbow: k at largest |Δ²(inertia)| on the inertia curve (normalized)."""
-    ys = np.asarray(inertias, dtype=float)
-    ks = np.asarray(k_range, dtype=float)
-    if ks.size < 3:
-        return int(k_range[0])
-    yn = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
-    d2 = np.diff(yn, n=2)
-    if d2.size == 0:
-        return int(k_range[len(k_range) // 2])
-    j = int(np.argmax(np.abs(d2)))
-    mid = min(max(j + 1, 0), len(k_range) - 1)
-    return int(k_range[mid])
-
-
-def _cluster_brief(centroid: np.ndarray, features: list[str], hi_thr: float = 0.5, lo_thr: float = -0.5) -> str:
-    vals = np.asarray(centroid, dtype=float)
-    if vals.size == 0:
-        return "Balanced profile (no clear dominant signals)."
-    order_hi = np.argsort(-vals)
-    order_lo = np.argsort(vals)
-    hi = [features[i] for i in order_hi if vals[i] >= hi_thr][:3]
-    lo = [features[i] for i in order_lo if vals[i] <= lo_thr][:2]
-    fmt = lambda n: n.replace("_", " ")
-    hi_txt, lo_txt = ", ".join(fmt(x) for x in hi), ", ".join(fmt(x) for x in lo)
-    if hi and lo:
-        return f"Above average on {hi_txt}; relatively lower on {lo_txt}."
-    if hi:
-        return f"Above average on {hi_txt}."
-    if lo:
-        return f"No feature is strongly above the filtered-set average; relatively lower on {lo_txt}."
-    return "Mid-range on all selected features for this filter."
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -203,7 +167,11 @@ def feature_ranges(vintage: Vintage = "present") -> FeatureRangesResponse:
         ranges["nfh_overall_score"] = FeatureRange(min=float(v.min()), max=float(v.max()))
 
     activity_columns = sorted(
-        c for c in df.columns if c.startswith("act_") and c.endswith("_storefront")
+        c
+        for c in df.columns
+        if c.startswith("act_")
+        and c.endswith("_storefront")
+        and c not in _EXCLUDED_ACTIVITY_COLUMNS
     )
 
     return FeatureRangesResponse(
@@ -229,20 +197,34 @@ def geo_cdta() -> dict:
 
 @app.post("/api/cluster", response_model=ClusterResponse)
 def cluster(req: ClusterRequest) -> ClusterResponse:
-    df = load_features(req.vintage)
-    if req.boroughs:
-        df = df[df["borough"].isin(req.boroughs)].copy()
+    df_master = load_features(req.vintage)
 
-    missing = [f for f in req.features if f not in df.columns]
+    # Prepend required activity density features to the request features.
+    required_features = _get_required_features(df_master)
+    # Remove duplicates while preserving order: required features first, then optional.
+    # Ignore act_*_storefront count columns so clustering uses category densities only.
+    optional_features = [
+        f
+        for f in req.features
+        if f not in required_features
+        and not (f.startswith("act_") and f.endswith("_storefront"))
+    ]
+    all_features = required_features + optional_features
+
+    df = df_master
+    if req.boroughs:
+        df = df_master[df_master["borough"].isin(req.boroughs)].copy()
+
+    missing = [f for f in all_features if f not in df.columns]
     if missing:
         raise HTTPException(400, f"Unknown feature columns: {missing}")
 
-    df_clean = df.dropna(subset=req.features).reset_index(drop=True)
+    df_clean = df.dropna(subset=all_features).reset_index(drop=True)
     n = len(df_clean)
     if n < 4:
         raise HTTPException(422, f"Only {n} neighborhoods after filtering — need ≥4 to cluster.")
 
-    X_raw = df_clean[req.features].values.astype(float)
+    X_raw = df_clean[all_features].values.astype(float)
     X, mean, std = _zscore(X_raw)
 
     effective_max_k = min(req.max_k, n - 1)
@@ -289,18 +271,21 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
                 borough=str(borough) if pd.notna(borough) else None,
                 map_key=map_key,
                 cluster=int(viz_labels[i]),
-                raw={f: float(row[f]) for f in req.features},
+                raw={f: float(row[f]) for f in all_features},
             )
         )
 
     summaries: list[ClusterSummary] = []
     for c in range(viz_k):
         size = int((viz_labels == c).sum())
+        member_df = df_clean[viz_labels == c]
+        reps = _find_cluster_reps(df_master, df_clean, viz_labels, c)
+        description = _cluster_rich_description(c, viz_centroids[c], all_features, df_master, member_df, reps)
         summaries.append(
             ClusterSummary(
                 cluster=c,
                 size=size,
-                description=_cluster_brief(viz_centroids[c], req.features),
+                description=description,
                 centroid_z=[float(v) for v in viz_centroids[c]],
             )
         )
@@ -314,205 +299,13 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
         elbow_k_kneedle=int(elbow_k_kneedle),
         best_silhouette_k=int(best_sil_k),
         chosen_k=int(viz_k),
-        features=req.features,
+        features=all_features,
         feature_means=[float(v) for v in mean],
         feature_stds=[float(v) for v in std],
         points=points,
         centroids_z=[[float(v) for v in row] for row in viz_centroids],
         cluster_summaries=summaries,
     )
-
-
-def _build_sql(filters, boroughs_in_data: list[str]) -> tuple[str, list]:
-    """Return (sql, parameters) using DuckDB-style ? bindings for safety."""
-    where: list[str] = []
-    params: list = []
-
-    boroughs = filters.boroughs if filters.boroughs else boroughs_in_data
-    placeholders = ", ".join(["?"] * len(boroughs))
-    where.append(f"borough IN ({placeholders})")
-    params.extend(boroughs)
-
-    if filters.min_subway_stations is not None:
-        where.append("subway_station_count >= ?")
-        params.append(float(filters.min_subway_stations))
-    if filters.min_avg_pedestrian is not None:
-        where.append("avg_pedestrian >= ?")
-        params.append(float(filters.min_avg_pedestrian))
-    if filters.min_storefront_density is not None:
-        where.append("storefront_density_per_km2 >= ?")
-        params.append(float(filters.min_storefront_density))
-    if filters.min_storefront_filings is not None:
-        where.append("storefront_filing_count >= ?")
-        params.append(float(filters.min_storefront_filings))
-    if filters.min_commercial_activity is not None:
-        where.append("commercial_activity_score >= ?")
-        params.append(float(filters.min_commercial_activity))
-    if filters.max_competitive_score is not None:
-        where.append("competitive_score <= ?")
-        params.append(float(filters.max_competitive_score))
-    if filters.max_shooting_incident_count is not None:
-        where.append("shooting_incident_count <= ?")
-        params.append(float(filters.max_shooting_incident_count))
-    if filters.min_nfh_goal4 is not None:
-        where.append("nfh_goal4_fin_shocks_score >= ?")
-        params.append(float(filters.min_nfh_goal4))
-    if filters.min_nfh_overall is not None:
-        where.append("nfh_overall_score >= ?")
-        params.append(float(filters.min_nfh_overall))
-
-    sql = (
-        "SELECT * FROM nbhd WHERE "
-        + " AND ".join(where)
-        + " ORDER BY commercial_activity_score DESC"
-    )
-    return sql, params
-
-
-def _interpolate_sql(sql: str, params: list) -> str:
-    """Inline ``?`` placeholders with their literal SQL values for display only.
-
-    DuckDB execution still uses the parameterized form; this is purely so the
-    user can read the actual query in the UI instead of '?' placeholders.
-    """
-    parts = sql.split("?")
-    if len(parts) - 1 != len(params):
-        return sql
-    out: list[str] = [parts[0]]
-    for i, value in enumerate(params):
-        if value is None:
-            literal = "NULL"
-        elif isinstance(value, bool):
-            literal = "TRUE" if value else "FALSE"
-        elif isinstance(value, (int,)):
-            literal = str(value)
-        elif isinstance(value, float):
-            literal = f"{int(value)}" if float(value).is_integer() else f"{value:g}"
-        else:
-            # Quote strings, escape embedded single quotes.
-            s = str(value).replace("'", "''")
-            literal = f"'{s}'"
-        out.append(literal)
-        out.append(parts[i + 1])
-    return "".join(out)
-
-
-def _supabase_client():
-    """Return a Supabase client if env vars are set, else None. Lazy-imports supabase-py."""
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    if not url or not key:
-        return None
-    from supabase import create_client  # imported lazily so the dep is optional
-
-    return create_client(url, key)
-
-
-def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
-    """Query Supabase via the match_neighborhoods RPC, then blend in Python."""
-    # Per-category competitive scoring needs act_*_storefront columns the RPC
-    # doesn't return — let the caller fall back to the CSV path in that case.
-    if req.competitive_source and req.competitive_source != "__overall__":
-        raise NotImplementedError(
-            "competitive_source != '__overall__' requires the CSV path (per-category act_* data)."
-        )
-
-    query_embedding = embed_texts([req.query])[0].tolist()
-
-    # match_count default in the SQL is 50; bump to 200 to comfortably cover all CDTAs.
-    rpc_args = {
-        "query_embedding": query_embedding,
-        "boroughs": req.filters.boroughs or None,
-        "min_subway_station_count": (
-            int(req.filters.min_subway_stations) if req.filters.min_subway_stations is not None else None
-        ),
-        "min_avg_pedestrian": req.filters.min_avg_pedestrian,
-        "min_storefront_density": req.filters.min_storefront_density,
-        "min_storefront_filing_count": (
-            int(req.filters.min_storefront_filings) if req.filters.min_storefront_filings is not None else None
-        ),
-        "min_commercial_activity": req.filters.min_commercial_activity,
-        "max_competitive_score": req.filters.max_competitive_score,
-        "max_shooting_incident_count": (
-            int(req.filters.max_shooting_incident_count)
-            if req.filters.max_shooting_incident_count is not None
-            else None
-        ),
-        "min_nfh_goal4_score": req.filters.min_nfh_goal4,
-        "min_nfh_overall_score": req.filters.min_nfh_overall,
-        "match_count": 200,
-    }
-    resp = client.rpc("match_neighborhoods", rpc_args).execute()
-    rows_raw: list[dict] = resp.data or []
-
-    if not rows_raw:
-        return RankResponse(rows=[], n_total=0, n_filtered=0, sql="-- via supabase RPC --")
-
-    sims = np.array([float(r["similarity"]) for r in rows_raw], dtype=float)
-    competitive = np.array(
-        [float(r.get("competitive_score") or 0.0) for r in rows_raw],
-        dtype=float,
-    )
-
-    # Higher competition penalises rank, so negate before MinMax (matches the CSV path).
-    X = np.column_stack([sims, -competitive])
-    if X.shape[0] == 1:
-        scaled = np.ones((1, 2)) * 0.5
-    else:
-        scaled = MinMaxScaler().fit_transform(X)
-    alpha, beta = req.alpha, 1.0 - req.alpha
-    final = scaled @ np.array([alpha, beta], dtype=float)
-
-    order = np.argsort(-final)
-    cmap = req.cluster_assignments or {}
-    bmap = req.cluster_briefs or {}
-    out: list[RankRow] = []
-    for rank_pos, idx in enumerate(order, start=1):
-        r = rows_raw[idx]
-        name = r["neighborhood"]
-        cd = r.get("cd")
-        borough = r.get("borough")
-        cluster_id = cmap.get(name)
-        out.append(
-            RankRow(
-                rank=rank_pos,
-                neighborhood=name,
-                cd=cd,
-                borough=borough,
-                map_key=f"{cd} | {borough}" if cd and borough else None,
-                semantic_similarity=float(sims[idx]),
-                specific_competitive_score=float(competitive[idx]),
-                blended_score=float(final[idx]),
-                cluster=int(cluster_id) if cluster_id is not None else None,
-                cluster_description=bmap.get(str(cluster_id)) if cluster_id is not None else None,
-            )
-        )
-    return RankResponse(rows=out, n_total=len(rows_raw), n_filtered=len(rows_raw), sql="-- via supabase RPC --")
-
-
-def _clean_for_json(rows: list[dict]) -> list[dict]:
-    """Replace NaN / inf with None and downcast numpy scalars so FastAPI can serialise."""
-    out: list[dict] = []
-    for row in rows:
-        clean: dict = {}
-        for k, v in row.items():
-            if isinstance(v, (np.integer,)):
-                clean[k] = int(v)
-            elif isinstance(v, (np.floating, float)):
-                fv = float(v)
-                clean[k] = fv if np.isfinite(fv) else None
-            elif v is pd.NA:
-                clean[k] = None
-            else:
-                try:
-                    if pd.isna(v):
-                        clean[k] = None
-                        continue
-                except (TypeError, ValueError):
-                    pass
-                clean[k] = v
-        out.append(clean)
-    return out
 
 
 @app.post("/api/filter", response_model=FilterResponse)
@@ -656,20 +449,6 @@ def rank(req: RankRequest) -> RankResponse:
         n_filtered=len(df_filtered),
         sql=_interpolate_sql(sql, params),
     )
-
-
-def _top5_markdown(rank_resp: RankResponse) -> str:
-    """Render the top 5 ranked rows as a markdown table for Claude's prompt."""
-    header = (
-        "| # | neighborhood | semantic_similarity | specific_competitive_score | blended_score |\n"
-        "|---|---|---|---|---|\n"
-    )
-    body = "\n".join(
-        f"| {row.rank} | {row.neighborhood} | {row.semantic_similarity:.4f} | "
-        f"{row.specific_competitive_score:.4f} | {row.blended_score:.4f} |"
-        for row in rank_resp.rows[:5]
-    )
-    return header + body
 
 
 @app.post("/api/agent")

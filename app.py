@@ -1,8 +1,8 @@
-"""
-K-Selection / Clustering — default Streamlit home page (`streamlit run app.py`).
+﻿"""
+K-Selection / Clustering - default Streamlit home page (`streamlit run app.py`).
 
-Runs K-means for k = 2 … max_k, elbow & silhouette charts, maps, and cluster notes.
-Results are stored in session state for the **Ranking** page (neighborhood → cluster + brief).
+Runs K-means for k = 2 ... max_k, elbow and silhouette charts, maps, and cluster notes.
+Results are stored in session state for the **Ranking** page (neighborhood -> cluster + brief).
 """
 
 from __future__ import annotations
@@ -19,74 +19,56 @@ from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from embeddings import cosine_similarity, load_embeddings  # noqa: E402
 from kmeans_numpy import (
     compute_inertia,
-    kmeans,
     kmeans_plus_plus,
     kmeans_plus_plus_with_caching,
     silhouette_score,
 )  # noqa: E402
+from streamlit_app.cluster_helpers import (  # noqa: E402
+    cluster_brief_description,
+    clustering_density_feature_options,
+    cluster_semantics_from_embeddings,
+    find_elbow,
+    find_elbow_curvature_knee,
+    zscore_normalize,
+)
+from streamlit_app.constants import (  # noqa: E402
+    BASE_CANDIDATE_FEATURES,
+    BASE_DEFAULT_FEATURES,
+    color_for_cluster,
+    readable_feature_label,
+)
 from config import (  # noqa: E402
     CDTA_SHAPE_PATH,
     load_cdta_gdf_for_map,
     load_neighborhood_features,
 )
 
-# ── Constants ────────────────────────────────────────────────────────────────
-
-CANDIDATE_FEATURES: list[str] = [
-    "storefront_filing_count",
-    "avg_pedestrian",
-    "subway_station_count",
-    "storefront_density_per_km2",
-    "commercial_activity_score",
-    "competitive_score",
-    "shooting_incident_count",
-    "transit_activity_score",
-    "category_entropy",
-    "category_diversity",
-    "peak_pedestrian",
-    "subway_density_per_km2",
-    "nfh_overall_score",
-    "nfh_goal4_fin_shocks_score",
-    "total_jobs",
-]
-
-DEFAULT_FEATURES: list[str] = [
-    "storefront_filing_count",
-    "avg_pedestrian",
-    "subway_station_count",
-    "storefront_density_per_km2",
-    "commercial_activity_score",
-    "competitive_score",
-    "shooting_incident_count",
-    "transit_activity_score",
-    "category_entropy",
-    "nfh_overall_score",
-    "total_jobs",
-]
-
-# ── Page config ──────────────────────────────────────────────────────────────
+# â”€â”€ Page config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 st.set_page_config(
-    page_title="K-Selection · Clustering",
+    page_title="K-Selection - Clustering",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.title("K-Selection / Clustering")
 st.caption(
-    "Compare inertia and silhouette across k = 2 … max_k, then explore clusters. "
+    "Compare inertia and silhouette across k = 2 ... max_k, then explore clusters. "
     "Run **K-Selection Analysis** to refresh labels used on the **Ranking** page."
 )
 
-# ── Load data ────────────────────────────────────────────────────────────────
+# â”€â”€ Load data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 df_full = load_neighborhood_features()
 
-# ── Sidebar controls ─────────────────────────────────────────────────────────
+activity_density_features = clustering_density_feature_options(df_full)
+CANDIDATE_FEATURES: list[str] = BASE_CANDIDATE_FEATURES + activity_density_features
+DEFAULT_FEATURES: list[str] = BASE_DEFAULT_FEATURES + activity_density_features
+
+# â”€â”€ Sidebar controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 st.sidebar.header("Filters & Settings")
 
@@ -102,8 +84,9 @@ selected_features = st.sidebar.multiselect(
     "Features for clustering",
     options=CANDIDATE_FEATURES,
     default=DEFAULT_FEATURES,
-    help="Numeric columns used to build the feature matrix. "
+    help="Numeric columns used for clustering, including optional business category density features. "
     "Features are z-score normalised before K-means runs.",
+    format_func=readable_feature_label,
 )
 
 max_k = st.sidebar.slider(
@@ -112,10 +95,10 @@ max_k = st.sidebar.slider(
     max_value=15,
     value=8,
     help="Upper bound for the k sweep (same default range as the Next.js K-Selection page). "
-    "Automatically capped at (n_neighborhoods − 1).",
+    "Automatically capped at (n_neighborhoods - 1).",
 )
 
-# ── Apply borough filter ─────────────────────────────────────────────────────
+# â”€â”€ Apply borough filter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if not selected_boroughs:
     st.warning("Select at least one borough.")
@@ -143,13 +126,7 @@ if n < 4:
     )
     st.stop()
 
-# ── Build feature matrix ─────────────────────────────────────────────────────
-
-
-def zscore_normalize(arr: np.ndarray) -> np.ndarray:
-    mean = arr.mean(axis=0)
-    std = arr.std(axis=0)
-    return (arr - mean) / (std + 1e-8)
+# â”€â”€ Build feature matrix â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 X_raw = df_clean[selected_features].values.astype(float)
@@ -160,170 +137,18 @@ k_range = list(range(2, effective_max_k + 1))
 
 if effective_max_k < max_k:
     st.info(
-        f"max_k capped at {effective_max_k} (= n − 1 = {n} − 1) "
+        f"max_k capped at {effective_max_k} (= n - 1 = {n} - 1) "
         f"because you cannot have more clusters than neighborhoods."
     )
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-CLUSTER_PALETTE: list[str] = [
-    "#4A90D9",
-    "#E74C3C",
-    "#2ECC71",
-    "#F39C12",
-    "#9B59B6",
-    "#1ABC9C",
-    "#E67E22",
-    "#3498DB",
-    "#E91E63",
-    "#00BCD4",
-    "#8BC34A",
-    "#FF5722",
-    "#795548",
-    "#607D8B",
-    "#FF9800",
-    "#673AB7",
-    "#009688",
-    "#F44336",
-    "#CDDC39",
-    "#03A9F4",
-]
-
-
-def find_elbow(k_range: list[int], inertias: list[float]) -> int:
-    """Same as FastAPI `api.main._find_elbow`: max perpendicular distance to inertia chord (normalized axes)."""
-    ks = np.array(k_range, dtype=float)
-    ys = np.array(inertias, dtype=float)
-    ks_n = (ks - ks.min()) / (ks.max() - ks.min() + 1e-12)
-    ys_n = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
-    dx = ks_n[-1] - ks_n[0]
-    dy = ys_n[-1] - ys_n[0]
-    norm = np.sqrt(dx**2 + dy**2) + 1e-12
-    distances = np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
-    return k_range[int(np.argmax(distances))]
-
-
-def find_elbow_curvature_knee(k_range: list[int], inertias: list[float]) -> int:
-    """Same as FastAPI `api.main._find_elbow_curvature_knee`: k at largest |Δ²(inertia)| (normalized curve)."""
-    ys = np.asarray(inertias, dtype=float)
-    ks = np.asarray(k_range, dtype=float)
-    if ks.size < 3:
-        return int(k_range[0])
-    yn = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
-    d2 = np.diff(yn, n=2)
-    if d2.size == 0:
-        return int(k_range[len(k_range) // 2])
-    j = int(np.argmax(np.abs(d2)))
-    mid = min(max(j + 1, 0), len(k_range) - 1)
-    return int(k_range[mid])
-
-
-def _color_for_cluster(c: int) -> str:
-    return CLUSTER_PALETTE[c % len(CLUSTER_PALETTE)]
-
-
-def _cluster_semantics_from_embeddings(
-    df_master: pd.DataFrame,
-    df_clustered: pd.DataFrame,
-    labels: np.ndarray,
-    k: int,
-    *,
-    top_n: int = 3,
-    text_max_len: int = 420,
-) -> list[dict[str, object]] | None:
-    """Per-cluster representatives using cached neighborhood embeddings (full-table row order)."""
-    loaded = load_embeddings()
-    if loaded is None:
-        return None
-    emb_all, texts_all = loaded
-    n_master = len(df_master)
-    if emb_all.shape[0] != n_master or len(texts_all) != n_master:
-        return None
-    name_to_row = {str(n): i for i, n in enumerate(df_master["neighborhood"].tolist())}
-    names_rows = df_clustered["neighborhood"].astype(str).tolist()
-    lab = labels.astype(int, copy=False)
-    rows_out: list[dict[str, object]] = []
-    for c in range(k):
-        pairs: list[tuple[str, int]] = []
-        for i in range(len(lab)):
-            if int(lab[i]) != c:
-                continue
-            nm = names_rows[i]
-            if nm not in name_to_row:
-                continue
-            pairs.append((nm, name_to_row[nm]))
-        if not pairs:
-            rows_out.append({"cluster": c, "n": 0, "reps": []})
-            continue
-        row_idx = np.array([p[1] for p in pairs], dtype=int)
-        Xc = emb_all[row_idx].astype(np.float32, copy=False)
-        mean_v = Xc.mean(axis=0).astype(np.float32, copy=False)
-        sims = cosine_similarity(mean_v, Xc)
-        order = np.argsort(-sims)
-        take = min(top_n, len(order))
-        reps: list[dict[str, object]] = []
-        for j in range(take):
-            li = int(order[j])
-            r = int(row_idx[li])
-            txt = str(texts_all[r])
-            if len(txt) > text_max_len:
-                txt = txt[: text_max_len - 1] + "…"
-            reps.append(
-                {
-                    "neighborhood": pairs[li][0],
-                    "cosine_to_mean": float(sims[li]),
-                    "profile_excerpt": txt,
-                }
-            )
-        rows_out.append({"cluster": c, "n": len(pairs), "reps": reps})
-    return rows_out
-
-
-def _cluster_brief_description(
-    centroid: np.ndarray,
-    features: list[str],
-    *,
-    hi_thr: float = 0.5,
-    lo_thr: float = -0.5,
-) -> str:
-    """One-line summary from centroid z-scores."""
-    vals = np.asarray(centroid, dtype=float)
-    if vals.size == 0:
-        return "Balanced profile (no clear dominant signals)."
-    order_hi = np.argsort(-vals)
-    order_lo = np.argsort(vals)
-    hi = [features[i] for i in order_hi if vals[i] >= hi_thr][:3]
-    lo = [features[i] for i in order_lo if vals[i] <= lo_thr][:2]
-
-    def _fmt(name: str) -> str:
-        return name.replace("_", " ")
-
-    hi_txt = ", ".join(_fmt(x) for x in hi)
-    lo_txt = ", ".join(_fmt(x) for x in lo)
-    # Centroids are in z-score space of the filtered rows (mean 0, std 1 per feature).
-    if hi and lo:
-        return f"Above average on {hi_txt}; relatively lower on {lo_txt}."
-    if hi:
-        return f"Above average on {hi_txt}."
-    if lo:
-        return (
-            "No feature is strongly above the filtered-set average (z < "
-            f"{hi_thr:g}); relatively lower on {lo_txt}."
-        )
-    return (
-        "Mid-range on all selected features for this filter "
-        f"(no z ≥ {hi_thr:g} or z ≤ {lo_thr:g} at the cluster centroid)."
-    )
-
-
-# ── Run analysis ─────────────────────────────────────────────────────────────
+# â”€â”€ Run analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if st.button("Run K-Selection Analysis", type="primary"):
     inertias: list[float] = []
     sil_numpy: list[float] = []
     sil_sklearn: list[float] = []
 
-    progress = st.progress(0, text="Running K-means…")
+    progress = st.progress(0, text="Running K-means...")
     total_steps = len(k_range)
 
     for step, k in enumerate(k_range):
@@ -355,7 +180,7 @@ if st.button("Run K-Selection Analysis", type="primary"):
     st.session_state["ks_features"] = selected_features
     st.session_state["ks_n"] = n
 
-# ── Display results (persisted via session state) ────────────────────────────
+# â”€â”€ Display results (persisted via session state) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if "ks_k_range" in st.session_state:
     k_range_s: list[int] = st.session_state["ks_k_range"]
@@ -385,13 +210,13 @@ if "ks_k_range" in st.session_state:
     st.session_state["ks_user_k"] = viz_k
 
     st.success(
-        f"Heuristic references — elbow (**⟂ chord**, grey): **k = {elbow_k}** · "
-        f"alt. elbow (**Δ² inertia**, green when shown): **k = {elbow_k_kneedle}** · "
+        f"Heuristic references - elbow (**chord distance**, grey): **k = {elbow_k}** · "
+        f"alt. elbow (**Delta^2 inertia**, green when shown): **k = {elbow_k_kneedle}** · "
         f"best silhouette (sklearn): **k = {best_sil_k}**. "
         f"Visualizations use **k = {viz_k}** (sidebar)."
     )
 
-    # ── Dual-axis Plotly chart ────────────────────────────────────────────────
+    # â”€â”€ Dual-axis Plotly chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -423,7 +248,7 @@ if "ks_k_range" in st.session_state:
         x=elbow_k,
         line_dash="dash",
         line_color="gray",
-        annotation_text=f"elbow ⟂ k={elbow_k}",
+        annotation_text=f"elbow chord k={elbow_k}",
         annotation_position="top right",
     )
     if elbow_k_kneedle != elbow_k:
@@ -431,7 +256,7 @@ if "ks_k_range" in st.session_state:
             x=elbow_k_kneedle,
             line_dash="dot",
             line_color="darkgreen",
-            annotation_text=f"Δ² elbow k={elbow_k_kneedle}",
+            annotation_text=f"Delta^2 elbow k={elbow_k_kneedle}",
             annotation_position="top left",
         )
 
@@ -457,13 +282,13 @@ if "ks_k_range" in st.session_state:
 
     st.info(
         "**Grey dashed** = elbow via **max perpendicular distance** to the inertia chord (same as FastAPI `elbow_k`). "
-        "**Green dotted** (when shown) = alternate elbow from **|Δ² inertia|** on the normalized curve (`elbow_k_kneedle`). "
+        "**Green dotted** (when shown) = alternate elbow from **|Delta^2 inertia|** on the normalized curve (`elbow_k_kneedle`). "
         "**Orange** (when shown) = sidebar **Clusters (k)** if it differs from grey. "
         "**Yellow row** in the table matches **Clusters (k)**. "
         "**Silhouette** (red) is a separate cue."
     )
 
-    # ── Cluster visualization ─────────────────────────────────────────────────
+    # â”€â”€ Cluster visualization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     st.subheader("Cluster Visualization")
 
@@ -475,21 +300,37 @@ if "ks_k_range" in st.session_state:
     viz_labels, viz_centroids, _ = kmeans_plus_plus_with_caching(
         features_s, X_s, k=viz_k, random_state=42
     )
+    sem = cluster_semantics_from_embeddings(
+        df_full,
+        df_s,
+        viz_labels,
+        viz_k,
+        centroids=viz_centroids,
+        features=features_s,
+    )
 
-    # Share with Ranking page: neighborhood → cluster id, and per-cluster brief text
+    # Share with Ranking page: neighborhood -> cluster id, and per-cluster profile text
     _names_v = df_s["neighborhood"].astype(str).tolist()
     st.session_state["ks_cluster_by_neighborhood"] = {
         _names_v[i]: int(viz_labels[i]) for i in range(len(_names_v))
     }
+    _semantic_descriptions = (
+        {int(block["cluster"]): str(block.get("description") or "") for block in sem}
+        if sem is not None
+        else {}
+    )
     st.session_state["ks_cluster_brief"] = {
-        c: _cluster_brief_description(viz_centroids[c], features_s)
+        c: _semantic_descriptions.get(
+            c,
+            cluster_brief_description(viz_centroids[c], features_s),
+        )
         for c in range(viz_k)
     }
     st.session_state["ks_cluster_k"] = int(viz_k)
 
     col_left, col_right = st.columns(2)
 
-    # ── View 1: Feature scatter ───────────────────────────────────────────────
+    # â”€â”€ View 1: Feature scatter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     with col_left:
         st.markdown("**Feature Scatter**")
@@ -528,7 +369,7 @@ if "ks_k_range" in st.session_state:
                     mode="markers",
                     marker=dict(
                         size=9,
-                        color=_color_for_cluster(c),
+                        color=color_for_cluster(c),
                         opacity=0.85,
                         line=dict(width=0.5, color="white"),
                     ),
@@ -542,7 +383,7 @@ if "ks_k_range" in st.session_state:
                 )
             )
 
-        # Centroid stars (in raw space: centroid in z-score → back to raw)
+        # Centroid stars (in raw space: centroid in z-score -> back to raw)
         x_mean = X_raw_s.mean(axis=0)
         x_std = X_raw_s.std(axis=0) + 1e-8
         centroids_raw = viz_centroids * x_std + x_mean
@@ -556,7 +397,7 @@ if "ks_k_range" in st.session_state:
                     marker=dict(
                         size=18,
                         symbol="star",
-                        color=_color_for_cluster(c),
+                        color=color_for_cluster(c),
                         line=dict(width=1.5, color="black"),
                     ),
                     name=f"Centroid {c}",
@@ -578,7 +419,7 @@ if "ks_k_range" in st.session_state:
         )
         st.plotly_chart(scatter_fig, use_container_width=True)
 
-    # ── View 2: Centroid bar chart ────────────────────────────────────────────
+    # â”€â”€ View 2: Centroid bar chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     with col_right:
         st.markdown("**Centroid Profiles** *(z-score space)*")
@@ -590,7 +431,7 @@ if "ks_k_range" in st.session_state:
                     name=f"Cluster {c}",
                     x=features_s,
                     y=viz_centroids[c].tolist(),
-                    marker_color=_color_for_cluster(c),
+                    marker_color=color_for_cluster(c),
                     opacity=0.85,
                 )
             )
@@ -606,13 +447,13 @@ if "ks_k_range" in st.session_state:
         )
         st.plotly_chart(bar_fig, use_container_width=True)
 
-    # ── NYC map (CDTA choropleth) ────────────────────────────────────────────
+    # â”€â”€ NYC map (CDTA choropleth) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     st.markdown("**NYC map** *(CDTA polygons filled by cluster)*")
 
     if not CDTA_SHAPE_PATH.is_file():
         st.info(
-            f"No boundary file at `{CDTA_SHAPE_PATH}` — map is skipped. "
+            f"No boundary file at `{CDTA_SHAPE_PATH}` - map is skipped. "
             "The CDTA shapefile is normally under `data/raw/nyc_boundaries/`."
         )
     else:
@@ -652,8 +493,8 @@ if "ks_k_range" in st.session_state:
                         z=[1] * len(sub),
                         featureidkey="properties.map_key",
                         colorscale=[
-                            [0.0, _color_for_cluster(c)],
-                            [1.0, _color_for_cluster(c)],
+                            [0.0, color_for_cluster(c)],
+                            [1.0, color_for_cluster(c)],
                         ],
                         showscale=False,
                         marker_opacity=0.65,
@@ -683,7 +524,7 @@ if "ks_k_range" in st.session_state:
             )
             st.plotly_chart(map_fig, use_container_width=True)
 
-    # ── Semantic hints from cached embeddings ─────────────────────────────────
+    # â”€â”€ Semantic hints from cached embeddings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     st.subheader("Cluster notes (cached embeddings)")
     st.caption(
@@ -691,7 +532,6 @@ if "ks_k_range" in st.session_state:
         "Per cluster: average embedding of members, then the neighborhoods whose vectors are "
         "closest to that mean (cosine). Text is the saved profile string from `src.embeddings`."
     )
-    sem = _cluster_semantics_from_embeddings(df_full, df_s, viz_labels, viz_k)
     if sem is None:
         st.info(
             "No embedding cache found, or embedding row count does not match "
@@ -703,12 +543,14 @@ if "ks_k_range" in st.session_state:
             c = int(block["cluster"])
             n_cluster = int(block["n"])
             reps = block["reps"]
+            description = str(
+                block.get("description")
+                or cluster_brief_description(viz_centroids[c], features_s)
+            )
             with st.expander(
-                f"Cluster {c} — n={n_cluster} neighborhoods", expanded=(c == 0)
+                f"Cluster {c} - n={n_cluster} neighborhoods", expanded=(c == 0)
             ):
-                st.markdown(
-                    f"**Brief description:** {_cluster_brief_description(viz_centroids[c], features_s)}"
-                )
+                st.markdown(f"**Cluster description:** {description}")
                 if not reps:
                     st.write("No members matched the embedding index.")
                 else:
@@ -717,11 +559,11 @@ if "ks_k_range" in st.session_state:
                         nm = str(rep["neighborhood"])
                         excerpt = str(rep["profile_excerpt"])
                         st.markdown(
-                            f"**{rank}.** `{nm}` — cosine to cluster mean **{sim:.3f}**"
+                            f"**{rank}.** `{nm}` - cosine to cluster mean **{sim:.3f}**"
                         )
                         st.caption(excerpt)
 
-    # ── Summary table ─────────────────────────────────────────────────────────
+    # â”€â”€ Summary table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     st.subheader("Results table")
     st.caption(
@@ -758,12 +600,12 @@ if "ks_k_range" in st.session_state:
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    # ── Feature details ───────────────────────────────────────────────────────
+    # â”€â”€ Feature details â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     with st.expander("Feature details", expanded=False):
         st.markdown(
             "Features were **z-score normalised** before clustering "
-            f"(mean=0, std≈1 per column). {n_s} neighborhoods × {len(features_s)} features."
+            f"(mean=0, std~1 per column). {n_s} neighborhoods x {len(features_s)} features."
         )
         feat_stats = pd.DataFrame(
             {

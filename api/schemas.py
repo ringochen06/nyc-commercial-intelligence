@@ -11,7 +11,7 @@ Vintage = Literal["present"]
 
 
 class ClusterRequest(BaseModel):
-    features: list[str] = Field(..., min_length=1, description="Feature column names used for clustering.")
+    features: list[str] = Field(..., min_length=1, description="Optional additional feature column names for clustering. Business category density features (act_*_density) are required and will be automatically prepended.")
     boroughs: list[str] | None = Field(None, description="If set, restrict to these boroughs.")
     max_k: int = Field(
         8,

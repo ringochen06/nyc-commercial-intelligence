@@ -267,6 +267,28 @@ def _top5_markdown_for_agent(blend_df: pd.DataFrame) -> str:
     return header + body
 
 
+def _summarize_cluster_description(description: str) -> str:
+    normalized = " ".join(str(description or "").split()).strip()
+    if not normalized:
+        return ""
+
+    title = normalized
+    if normalized.lower().startswith("cluster ") and " - " in normalized:
+        _, remainder = normalized.split(" - ", 1)
+        title = remainder.split(".", 1)[0].strip() or normalized
+
+    characterized_sentence = ""
+    marker = "Characterized by elevated "
+    start = normalized.find(marker)
+    if start != -1:
+        end = normalized.find(".", start)
+        characterized_sentence = (
+            normalized[start : end + 1].strip() if end != -1 else normalized[start:].strip()
+        )
+
+    return f"{title}.\n{characterized_sentence}".strip()
+
+
 def apply_hard_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, str, list]:
     """Parameterized DuckDB query (same binding style as `api.main._build_sql`)."""
     con = duckdb.connect()
@@ -330,14 +352,27 @@ if df_filtered.empty:
     )
     st.stop()
 
-_act_cols = sorted(c for c in df_filtered.columns if is_act_storefront_column(c))
+# Hard-filter neighborhood search
+hard_filter_search = st.text_input(
+    "Search neighborhoods",
+    key="hard_filter_search",
+    help="Filter by neighborhood name",
+)
+
+df_hard_display = df_filtered[
+    df_filtered["neighborhood"].str.contains(
+        hard_filter_search, case=False, na=False
+    )
+] if hard_filter_search else df_filtered
+
+_act_cols = sorted(c for c in df_hard_display.columns if is_act_storefront_column(c))
 display_cols = [
     "neighborhood",
     "borough",
     "storefront_filing_count",
 ]
 for _x in ("category_diversity", "category_entropy"):
-    if _x in df_filtered.columns:
+    if _x in df_hard_display.columns:
         display_cols.append(_x)
 display_cols.extend(_act_cols)
 display_cols.extend(
@@ -355,15 +390,15 @@ if SHOOTING_COUNT_COL is not None:
         display_cols.index("commercial_activity_score"), SHOOTING_COUNT_COL
     )
 for optional_col in ["nfh_overall_score", "nfh_goal4_fin_shocks_score"]:
-    if optional_col in df_filtered.columns:
+    if optional_col in df_hard_display.columns:
         display_cols.append(optional_col)
-display_cols = [c for c in display_cols if c in df_filtered.columns]
+display_cols = [c for c in display_cols if c in df_hard_display.columns]
 st.caption(
     f"Showing **{len(_act_cols)}** storefront activity columns (`act_*_storefront`) from your feature table; "
     "semantic profiles include every activity with count > 0 (`src/embeddings.py`)."
 )
 st.dataframe(
-    df_filtered[display_cols].reset_index(drop=True),
+    df_hard_display[display_cols].reset_index(drop=True),
     use_container_width=True,
     height=360,
 )
@@ -560,6 +595,9 @@ try:
             rk["cluster_description"] = rk["cluster"].apply(
                 lambda x: bmap.get(int(x), "") if pd.notna(x) else ""
             )
+            rk["cluster_description"] = rk["cluster_description"].apply(
+                _summarize_cluster_description
+            )
             rk["cluster"] = (
                 rk["cluster"]
                 .apply(lambda x: int(x) if pd.notna(x) else pd.NA)
@@ -594,7 +632,24 @@ try:
         ].copy()
         st.session_state["rank_agent_soft_query"] = soft_query
 
-        st.dataframe(ranking_df, use_container_width=True, height=380)
+        # Ranking table neighborhood search
+        ranking_search = st.text_input(
+            "Search ranked neighborhoods",
+            key="ranking_search",
+            help="Filter by neighborhood name",
+        )
+        ranking_display_df = ranking_df.reset_index()
+        if ranking_search:
+            ranking_display_df = ranking_display_df[
+                ranking_display_df["neighborhood"].str.contains(
+                    ranking_search, case=False, na=False
+                )
+            ]
+        st.dataframe(
+            ranking_display_df.set_index("rank"),
+            use_container_width=True,
+            height=380,
+        )
 
         # NYC map: blended score on CDTA polygons (sequential greens)
         st.markdown(

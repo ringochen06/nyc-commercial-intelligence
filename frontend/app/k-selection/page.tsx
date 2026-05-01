@@ -14,7 +14,7 @@ import { PlotlyChart } from "@/components/PlotlyChart";
 import { SectionCard } from "@/components/SectionCard";
 import { Slider } from "@/components/Slider";
 
-const CANDIDATE_FEATURES = [
+const BASE_CANDIDATE_FEATURES = [
   "storefront_filing_count",
   "avg_pedestrian",
   "subway_station_count",
@@ -32,7 +32,7 @@ const CANDIDATE_FEATURES = [
   "total_jobs",
 ];
 
-const DEFAULT_FEATURES = [
+const BASE_DEFAULT_FEATURES = [
   "storefront_filing_count",
   "avg_pedestrian",
   "subway_station_count",
@@ -46,10 +46,65 @@ const DEFAULT_FEATURES = [
   "total_jobs",
 ];
 
+const ACTIVITY_LABEL_REPLACEMENTS: Record<string, string> = {
+  "accounting services": "accounting services",
+  "broadcasting telecomm": "broadcasting and telecom",
+  "educational services": "education",
+  "finance and insurance": "finance and insurance",
+  "food services": "food service",
+  "health care or social assistance": "health care and social assistance",
+  "information services": "information services",
+  "legal services": "legal services",
+  manufacturing: "manufacturing",
+  "movies video sound": "media and entertainment",
+  "no business activity identified": "no identified business activity",
+  publishing: "publishing",
+  "real estate": "real estate",
+  retail: "retail",
+  unknown: "unknown activity",
+  wholesale: "wholesale",
+  other: "other services",
+};
+
+const formatFeatureLabel = (feature: string): string => {
+  if (feature.startsWith("act_") && feature.endsWith("_density")) {
+    const base = feature
+      .replace(/^act_/, "")
+      .replace(/_density$/, "")
+      .replace(/_/g, " ")
+      .toLowerCase();
+    return `${ACTIVITY_LABEL_REPLACEMENTS[base] ?? base} density`;
+  }
+  return feature.replace(/_/g, " ").toLowerCase();
+};
+
+const buildCandidateFeatures = (
+  ranges: FeatureRangesResponse | null
+): string[] => {
+  if (!ranges) return BASE_CANDIDATE_FEATURES;
+  const activityColumns = ranges.activity_columns ?? [];
+  const activityDensity = activityColumns
+    .map((col) => col.replace("_storefront", "_density"))
+    .filter((col) => col.endsWith("_density"));
+  return [...new Set([...BASE_CANDIDATE_FEATURES, ...activityDensity])];
+};
+
+const buildDefaultFeatures = (ranges: FeatureRangesResponse | null): string[] => {
+  if (!ranges) return BASE_DEFAULT_FEATURES;
+  const activityColumns = ranges.activity_columns ?? [];
+  const activityDensity = activityColumns
+    .map((col) => col.replace("_storefront", "_density"))
+    .filter((col) => col.endsWith("_density"));
+  return [...new Set([...BASE_DEFAULT_FEATURES, ...activityDensity])];
+};
+
 export default function KSelectionPage() {
   const [ranges, setRanges] = useState<FeatureRangesResponse | null>(null);
   const [boroughs, setBoroughs] = useState<string[]>([]);
-  const [features, setFeatures] = useState<string[]>(DEFAULT_FEATURES);
+  const [candidateFeatures, setCandidateFeatures] = useState<string[]>(
+    BASE_CANDIDATE_FEATURES
+  );
+  const [features, setFeatures] = useState<string[]>(BASE_DEFAULT_FEATURES);
   const [maxK, setMaxK] = useState(8);
   /** Partition size for maps / Ranking (must lie in the swept k range). */
   const [chosenK, setChosenK] = useState(8);
@@ -69,6 +124,10 @@ export default function KSelectionPage() {
       .then((r) => {
         setRanges(r);
         setBoroughs(r.boroughs);
+        const candidate = buildCandidateFeatures(r);
+        const defaults = buildDefaultFeatures(r);
+        setCandidateFeatures(candidate);
+        setFeatures(defaults);
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -203,9 +262,9 @@ export default function KSelectionPage() {
         name: `Cluster ${c}`,
         hovertemplate:
           "<b>%{text}</b><br>" +
-          scatterX +
+          formatFeatureLabel(scatterX) +
           ": %{x:.1f}<br>" +
-          scatterY +
+          formatFeatureLabel(scatterY) +
           ": %{y:.1f}<extra></extra>",
       });
 
@@ -236,8 +295,8 @@ export default function KSelectionPage() {
       <PlotlyChart
         data={traces}
         layout={{
-          xaxis: { title: { text: scatterX } },
-          yaxis: { title: { text: scatterY } },
+          xaxis: { title: { text: formatFeatureLabel(scatterX) } },
+          yaxis: { title: { text: formatFeatureLabel(scatterY) } },
           height: 420,
         }}
       />
@@ -251,7 +310,7 @@ export default function KSelectionPage() {
         data={Array.from({ length: result.chosen_k }, (_, c) => ({
           type: "bar" as const,
           name: `Cluster ${c}`,
-          x: result.features,
+          x: result.features.map(formatFeatureLabel),
           y: result.centroids_z[c],
           marker: { color: colorForCluster(c), opacity: 0.85 },
         }))}
@@ -363,10 +422,10 @@ export default function KSelectionPage() {
           <div className="space-y-4">
             <MultiSelect
               label="Features for clustering"
-              options={CANDIDATE_FEATURES}
+              options={candidateFeatures}
               value={features}
               onChange={setFeatures}
-              format={(f) => f.replace(/_/g, " ")}
+              format={formatFeatureLabel}
             />
             <Slider
               label="Maximum k"
@@ -444,7 +503,7 @@ export default function KSelectionPage() {
                 >
                   {result.features.map((f) => (
                     <option key={f} value={f}>
-                      {f}
+                      {formatFeatureLabel(f)}
                     </option>
                   ))}
                 </select>
@@ -455,7 +514,7 @@ export default function KSelectionPage() {
                 >
                   {result.features.map((f) => (
                     <option key={f} value={f}>
-                      {f}
+                      {formatFeatureLabel(f)}
                     </option>
                   ))}
                 </select>

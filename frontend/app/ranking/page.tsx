@@ -52,6 +52,24 @@ const PRIORITY_COLS = [
 
 const TEXT_COLS = new Set(["neighborhood", "cd", "borough"]);
 
+function summarizeClusterDescription(description: string | null): {
+  title: string;
+  characterization: string | null;
+} {
+  if (!description) {
+    return { title: "", characterization: null };
+  }
+
+  const normalized = description.replace(/\s+/g, " ").trim();
+  const titleMatch = normalized.match(/^Cluster\s+\d+\s+-\s+([^.]*)\./i);
+  const characterizationMatch = normalized.match(/(Characterized by elevated [^.]*\.)/i);
+
+  return {
+    title: titleMatch?.[1]?.trim() || normalized,
+    characterization: characterizationMatch?.[1]?.trim() || null,
+  };
+}
+
 function formatCell(col: string, value: unknown): string {
   if (TEXT_COLS.has(col)) return String(value ?? "");
   if (value === null || value === undefined) return "—";
@@ -230,6 +248,10 @@ export default function RankingPage() {
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentAnswer, setAgentAnswer] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
+
+  // Neighborhood search
+  const [filteredSearch, setFilteredSearch] = useState("");
+  const [rankedSearch, setRankedSearch] = useState("");
 
   const cluster = useClusterStore();
 
@@ -719,7 +741,22 @@ export default function RankingPage() {
             }
           >
             {filtered && filtered.rows.length > 0 ? (
-              <FilteredTable rows={filtered.rows} />
+              <>
+                <input
+                  type="text"
+                  placeholder="Search neighborhoods…"
+                  value={filteredSearch}
+                  onChange={(e) => setFilteredSearch(e.target.value)}
+                  className="glass-input mb-3 w-full"
+                />
+                <FilteredTable
+                  rows={filtered.rows.filter((row) =>
+                    String(row.neighborhood ?? "")
+                      .toLowerCase()
+                      .includes(filteredSearch.toLowerCase())
+                  )}
+                />
+              </>
             ) : (
               <p className="text-sm text-muted">
                 {filterError || "No rows match the current filters."}
@@ -745,48 +782,78 @@ export default function RankingPage() {
             }
           >
             {result && result.rows.length > 0 ? (
-              <div className="overflow-auto max-h-[520px] -mx-2 px-2">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Neighborhood</th>
-                      <th>Borough</th>
-                      {cluster.k !== null && <th>Cluster</th>}
-                      {cluster.k !== null && <th>Cluster description</th>}
-                      <th className="text-right">Semantic</th>
-                      <th className="text-right">Competitive</th>
-                      <th className="text-right">Blended</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.rows.map((row) => (
-                      <tr key={row.neighborhood}>
-                        <td className="text-muted tabular-nums">{row.rank}</td>
-                        <td className="font-medium text-ink">{row.neighborhood}</td>
-                        <td className="text-muted">{row.borough || ""}</td>
-                        {cluster.k !== null && (
-                          <td className="tabular-nums">{row.cluster ?? ""}</td>
-                        )}
-                        {cluster.k !== null && (
-                          <td className="text-[12px] text-muted">
-                            {row.cluster_description || ""}
-                          </td>
-                        )}
-                        <td className="text-right tabular-nums">
-                          {fmt(row.semantic_similarity, 4)}
-                        </td>
-                        <td className="text-right tabular-nums">
-                          {fmt(row.specific_competitive_score, 3)}
-                        </td>
-                        <td className="text-right tabular-nums font-semibold text-ink">
-                          {fmt(row.blended_score, 4)}
-                        </td>
+              <>
+                <input
+                  type="text"
+                  placeholder="Search neighborhoods…"
+                  value={rankedSearch}
+                  onChange={(e) => setRankedSearch(e.target.value)}
+                  className="glass-input mb-3 w-full"
+                />
+                <div className="overflow-auto max-h-[520px] -mx-2 px-2">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Neighborhood</th>
+                        <th>Borough</th>
+                        {cluster.k !== null && <th>Cluster</th>}
+                        {cluster.k !== null && <th>Cluster description</th>}
+                        <th className="text-right">Semantic</th>
+                        <th className="text-right">Competitive</th>
+                        <th className="text-right">Blended</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {result.rows
+                        .filter((row) =>
+                          String(row.neighborhood ?? "")
+                            .toLowerCase()
+                            .includes(rankedSearch.toLowerCase())
+                        )
+                        .map((row) => (
+                          <tr key={row.neighborhood}>
+                            {(() => {
+                              const clusterSummary = summarizeClusterDescription(
+                                row.cluster_description,
+                              );
+
+                              return (
+                                <>
+                            <td className="text-muted tabular-nums">{row.rank}</td>
+                            <td className="font-medium text-ink">{row.neighborhood}</td>
+                            <td className="text-muted">{row.borough || ""}</td>
+                            {cluster.k !== null && (
+                              <td className="tabular-nums">{row.cluster ?? ""}</td>
+                            )}
+                            {cluster.k !== null && (
+                              <td className="text-[12px] text-muted">
+                                {clusterSummary.title}
+                                {clusterSummary.characterization && (
+                                  <div className="mt-1">
+                                    {clusterSummary.characterization}
+                                  </div>
+                                )}
+                              </td>
+                            )}
+                            <td className="text-right tabular-nums">
+                              {fmt(row.semantic_similarity, 4)}
+                            </td>
+                            <td className="text-right tabular-nums">
+                              {fmt(row.specific_competitive_score, 3)}
+                            </td>
+                            <td className="text-right tabular-nums font-semibold text-ink">
+                              {fmt(row.blended_score, 4)}
+                            </td>
+                                </>
+                              );
+                            })()}
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             ) : (
               !loading && (
                 <p className="text-sm text-muted">

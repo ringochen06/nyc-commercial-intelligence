@@ -3,8 +3,17 @@
 import dynamic from "next/dynamic";
 import type { Data, Layout } from "plotly.js";
 
-// Dynamic import: Plotly is browser-only; SSR can't run it.
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+// Factory pattern: use plotly.js-dist-min (installed) instead of the full
+// plotly.js bundle that react-plotly.js's default entry requires.
+const Plot = dynamic(
+  async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const factory: any = await import("react-plotly.js/factory");
+    const Plotly = (await import("plotly.js-dist-min")).default;
+    return (factory.default ?? factory)(Plotly);
+  },
+  { ssr: false }
+);
 
 interface Props {
   data: Data[];

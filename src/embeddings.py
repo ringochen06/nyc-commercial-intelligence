@@ -9,6 +9,8 @@ Backends (see EMBEDDING_BACKEND):
 Caches under outputs/embeddings/:
   - OpenAI vectors: neighborhood_embeddings.npy (+ neighborhood_texts.npy)
   - Sentence-transformers: neighborhood_embeddings_st.npy (same texts file)
+Readable profile export under outputs/text_profiles/:
+    - neighborhood_profiles_readable.txt
 
 Usage (standalone):
     python -m src.embeddings          # embeds all neighborhoods, saves cache
@@ -41,9 +43,11 @@ SENTENCE_TRANSFORMER_MODEL = os.getenv(
 ).strip()
 
 EMBEDDINGS_DIR = Path(__file__).resolve().parent.parent / "outputs" / "embeddings"
+TEXT_PROFILES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "text_profiles"
 EMBEDDINGS_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings.npy"
 EMBEDDINGS_ST_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings_st.npy"
 TEXTS_PATH = EMBEDDINGS_DIR / "neighborhood_texts.npy"
+READABLE_PROFILES_PATH = TEXT_PROFILES_DIR / "neighborhood_profiles_readable.txt"
 
 _st_model = None
 
@@ -263,6 +267,76 @@ def build_all_profiles(df: pd.DataFrame) -> list[str]:
     return [build_text_profile(row) for _, row in df.iterrows()]
 
 
+def build_readable_profile(row: pd.Series) -> str:
+    """Return a labeled, multiline view of one neighborhood row for inspection."""
+    name = row.get("neighborhood", "Unknown")
+    borough = row.get("borough", "")
+
+    header = f"{name} ({borough})" if borough else str(name)
+    lines = [header, "-" * len(header)]
+
+    def add_value(label: str, value: object) -> None:
+        if pd.isna(value):
+            return
+        lines.append(f"{label}: {value}")
+
+    add_value("Area (km2)", row.get("area_km2"))
+    add_value("Storefront filing count", row.get("storefront_filing_count"))
+    add_value("Storefront density per km2", row.get("storefront_density_per_km2"))
+    add_value("Category diversity", row.get("category_diversity"))
+    add_value("Category entropy", row.get("category_entropy"))
+    add_value("Average pedestrian count", row.get("avg_pedestrian"))
+    add_value("Subway station count", row.get("subway_station_count"))
+    add_value("Commercial activity score", row.get("commercial_activity_score"))
+    add_value("Competitive score", row.get("competitive_score"))
+    add_value("Transit activity score", row.get("transit_activity_score"))
+    add_value("Shooting incident count", row.get("shooting_incident_count"))
+    add_value("Construction jobs", row.get("construction_jobs"))
+    add_value("Manufacturing jobs", row.get("manufacturing_jobs"))
+    add_value("Wholesale jobs", row.get("wholesale_jobs"))
+    add_value("Total jobs", row.get("total_jobs"))
+    add_value("Food services", row.get("food_services"))
+    add_value("Total businesses", row.get("total_businesses"))
+    add_value("NFH median income", row.get("nfh_median_income"))
+    add_value("Pct bachelor's or higher", row.get("pct_bachelors_plus"))
+    add_value("Commute by public transit", row.get("commute_public_transit"))
+    add_value("Population black", row.get("pop_black"))
+    add_value("Population Hispanic", row.get("pop_hispanic"))
+    add_value("Population Asian", row.get("pop_asian"))
+    add_value("Total population proxy", row.get("total_population_proxy"))
+    add_value("NFH overall score", row.get("nfh_overall_score"))
+    add_value("NFH financial shocks score", row.get("nfh_goal4_fin_shocks_score"))
+
+    act_pairs: list[tuple[str, float]] = []
+    for column in row.index:
+        if not str(column).startswith("act_") or not str(column).endswith("_storefront"):
+            continue
+        value = row.get(column, 0)
+        if pd.isna(value) or float(value) <= 0:
+            continue
+        label = str(column).removeprefix("act_").removesuffix("_storefront").replace("_", " ")
+        act_pairs.append((label, float(value)))
+
+    if act_pairs:
+        act_pairs.sort(key=lambda pair: (-pair[1], pair[0]))
+        lines.append("Storefront activity counts:")
+        for label, value in act_pairs:
+            lines.append(f"  - {label}: {int(value)}")
+
+    lines.append("Embedding text:")
+    lines.append(build_text_profile(row))
+    return "\n".join(lines)
+
+
+def save_readable_profiles(df: pd.DataFrame, path: Path | str = READABLE_PROFILES_PATH) -> Path:
+    """Write labeled neighborhood profiles to a text file and return the path."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = [build_readable_profile(row) for _, row in df.iterrows()]
+    output_path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+    return output_path
+
+
 # ── OpenAI embedding ────────────────────────────────────────────────────────
 
 
@@ -332,14 +406,16 @@ def embed_neighborhood_features(
     """
     End-to-end: load CSV -> build text profiles -> embed -> cache -> return.
     """
+    if csv_path is None:
+        csv_path = NEIGHBORHOOD_FEATURES_CSV
+    df = pd.read_csv(csv_path)
+    save_readable_profiles(df)
+
     if not force:
         cached = load_embeddings()
         if cached is not None:
             return cached
 
-    if csv_path is None:
-        csv_path = NEIGHBORHOOD_FEATURES_CSV
-    df = pd.read_csv(csv_path)
     texts = build_all_profiles(df)
     backend = resolve_embedding_backend()
 
@@ -367,6 +443,18 @@ def embed_neighborhood_features(
 if __name__ == "__main__":
     import sys
 
+    if "--clean-cache" in sys.argv:
+        removed = list(EMBEDDINGS_DIR.glob("*.npy"))
+        for f in removed:
+            f.unlink()
+        if removed:
+            print(f"Removed {len(removed)} cached file(s) from {EMBEDDINGS_DIR}:")
+            for f in removed:
+                print(f"  {f.name}")
+        else:
+            print(f"No cached files found in {EMBEDDINGS_DIR}.")
+        sys.exit(0)
+
     force = "--force" in sys.argv
     emb, texts = embed_neighborhood_features(force=force)
     b = resolve_embedding_backend()
@@ -374,4 +462,5 @@ if __name__ == "__main__":
     print(f"Backend: {b}")
     print(f"Embedded {len(texts)} neighborhoods -> shape {emb.shape}")
     print(f"Saved to {path}")
+    print(f"Readable profiles: {READABLE_PROFILES_PATH}")
     print(f"\nSample profile:\n{texts[0]}")

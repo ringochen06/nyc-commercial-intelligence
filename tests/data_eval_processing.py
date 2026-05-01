@@ -5,9 +5,8 @@ Generates evaluation snapshots with default year caps at 2022 and point-in-time
 pedestrian extracts for 2022 (tests) and 2024 (processed).
 
 Outputs:
-    tests/data/ped_clean_test.csv (point year == 2022 by default)
-    tests/data/storefront_features_test.csv (reporting year <= 2022 by default)
-    data/processed/ped_clean.csv (point year == 2024 by default)
+    tests/data/{max_year}/ — all max_year-filtered evaluation datasets
+    tests/data/2024/ — symlinks to data/processed/ for 2024 vintage
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ import pandas as pd
 from src.data_processing import clean_neighborhood_profiles, standardize_borough
 from src.feature_engineering import (
     build_storefront_features,
+    compute_area_features,
     load_boundaries,
     spatial_join_points,
 )
@@ -148,6 +148,38 @@ def clean_pedestrian_data_eval(
     return df.reset_index(drop=True)
 
 
+def clean_shooting_data_eval(
+    shooting_path: str | Path,
+    max_year: int = MAX_YEAR,
+) -> pd.DataFrame:
+    """Clean shooting incidents, filtering by incident year <= max_year.
+
+    Groups incidents by neighborhood (CDTA) and returns aggregated counts.
+    """
+    df = pd.read_csv(shooting_path)
+
+    df["OCCUR_DATE"] = pd.to_datetime(df["OCCUR_DATE"], format="%m/%d/%Y", errors="coerce")
+    df["incident_year"] = df["OCCUR_DATE"].dt.year
+
+    mask = (df["incident_year"] <= max_year) & (df["incident_year"].notna())
+    n_before = len(df)
+    df = df[mask].copy()
+    print(
+        f"  Shooting incidents: {n_before:,} -> {len(df):,} after year filter (<= {max_year})"
+    )
+
+    lat = pd.to_numeric(df["Latitude"], errors="coerce")
+    lon = pd.to_numeric(df["Longitude"], errors="coerce")
+    df["latitude"] = lat
+    df["longitude"] = lon
+    df["borough"] = standardize_borough(df["BORO"])
+
+    df = df.dropna(subset=["borough", "latitude", "longitude"])
+    df = df[(df["latitude"] != 0) & (df["longitude"] != 0)]
+
+    return df.reset_index(drop=True)
+
+
 def clean_storefront_data_eval(
     storefront_path: str | Path,
     max_year: int = MAX_YEAR,
@@ -200,7 +232,7 @@ def clean_storefront_data_eval(
     n_before = len(df_raw)
     df_raw = df_raw[mask].copy()
     print(
-        f"  Storefront rows: {n_before:,} → {len(df_raw):,} after year filter (<= {max_year})"
+        f"  Storefront rows: {n_before:,} -> {len(df_raw):,} after year filter (<= {max_year})"
     )
 
     df = df_raw.rename(columns=rename_map).copy()
@@ -292,18 +324,22 @@ def run_eval_processing(
         str | Path
     ) = "../data/raw/Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool.xlsx",
     boundary_path: str | Path = "../data/raw/nyc_boundaries/nycdta2020.shp",
+    shooting_path: str | Path = "../data/raw/NYC_historic_shooting_incidents.csv",
     output_dir: str | Path = "tests/data",
     max_year: int = MAX_YEAR,
     test_ped_year: int = TEST_PED_YEAR,
-    processed_ped_year: int = PROCESSED_PED_YEAR,
-    processed_output_dir: str | Path = "data/processed",
 ) -> None:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    processed_output_dir = Path(processed_output_dir)
-    processed_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Year-specific subdirectory for filtered datasets
+    year_dir = output_dir / str(max_year)
+    year_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Generating eval snapshots capped at {max_year}...\n")
+
+    boundary_gdf = load_boundaries(boundary_path)
+    area_df = compute_area_features(boundary_gdf)
 
     print("Step 1: pedestrian counts (tests point-in-time)")
     ped_df = clean_pedestrian_data_eval(
@@ -311,22 +347,11 @@ def run_eval_processing(
         year=test_ped_year,
         mode="exact",
     )
-    ped_out = output_dir / "ped_clean_test.csv"
+    ped_out = year_dir / "ped_clean_test.csv"
     ped_df.to_csv(ped_out, index=False)
     print(f"  Written: {ped_out}  ({len(ped_df)} rows)\n")
 
-    print("Step 1b: pedestrian counts (processed point-in-time)")
-    ped_2024_df = clean_pedestrian_data_eval(
-        ped_raw_path,
-        year=processed_ped_year,
-        mode="exact",
-    )
-    ped_2024_out = processed_output_dir / "ped_clean.csv"
-    ped_2024_df.to_csv(ped_2024_out, index=False)
-    print(f"  Written: {ped_2024_out}  ({len(ped_2024_df)} rows)\n")
-
     print("Step 2: storefront features")
-    boundary_gdf = load_boundaries(boundary_path)
     sf_clean = clean_storefront_data_eval(storefront_path, max_year=max_year)
     sf_joined = spatial_join_points(sf_clean, boundary_gdf)
     sf_feat = build_storefront_features(sf_joined)
@@ -347,15 +372,39 @@ def run_eval_processing(
             col = sf_feat.pop("act_UNKNOWN_storefront")
             pos = sf_feat.columns.get_loc(insert_after) + 1
             sf_feat.insert(pos, "act_UNKNOWN_storefront", col)
-    sf_out = output_dir / "storefront_features_test.csv"
+    sf_out = year_dir / "storefront_features_test.csv"
     sf_feat.to_csv(sf_out, index=False)
     print(f"  Written: {sf_out}  ({len(sf_feat)} rows x {sf_feat.shape[1]} cols)\n")
 
     print("Step 3: neighborhood profiles (MOCEJ + NFH)")
     nbhd_df = clean_neighborhood_profiles(nbhd_path, nfh_path=nfhd_raw_path)
-    nbhd_out = output_dir / "nbhd_clean_test.csv"
+    nbhd_out = year_dir / "nbhd_clean_test.csv"
     nbhd_df.to_csv(nbhd_out, index=False)
     print(f"  Written: {nbhd_out}  ({len(nbhd_df)} rows x {nbhd_df.shape[1]} cols)\n")
+
+    print("Step 4: shooting incidents")
+    shoot_clean = clean_shooting_data_eval(shooting_path, max_year=max_year)
+    shoot_joined = spatial_join_points(shoot_clean, boundary_gdf)
+    keys = ["neighborhood", "cd", "borough"]
+
+    shooting_counts = (
+        shoot_joined.groupby(keys, dropna=False)
+        .size()
+        .reset_index(name="shooting_incident_count")
+    )
+
+    shooting_feat = shooting_counts.merge(
+        area_df[keys + ["area_km2"]], on=keys, how="left"
+    )
+    shooting_feat["shooting_density_per_km2"] = (
+        shooting_feat["shooting_incident_count"] / shooting_feat["area_km2"]
+    )
+
+    shooting_feat = shooting_feat[keys + ["area_km2", "shooting_incident_count", "shooting_density_per_km2"]]
+
+    shoot_out = year_dir / "shooting_features_test.csv"
+    shooting_feat.to_csv(shoot_out, index=False)
+    print(f"  Written: {shoot_out}  ({len(shooting_feat)} rows x {shooting_feat.shape[1]} cols)\n")
 
     print("Done. subway_clean.csv unchanged.")
 

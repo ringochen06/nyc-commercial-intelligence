@@ -30,12 +30,14 @@ def run_eval_pipeline(
     nbhd_path: str | Path = _RAW / "Public - Neighborhood Profiles 2018 - All.csv",
     nfhd_raw_path: str | Path = _RAW / "Neighborhood_Financial_Health_Digital_Mapping_and_Data_Tool.xlsx",
     boundary_path: str | Path = _RAW / "nyc_boundaries" / "nycdta2020.shp",
+    shooting_path: str | Path = _RAW / "NYC_historic_shooting_incidents.csv",
     subway_path: str | Path = _PROCESSED / "subway_clean.csv",
     output_dir: str | Path = _TESTS_DATA,
     max_year: int = 2022,
 ) -> None:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    year_dir = output_dir / str(max_year)
 
     print(f"Step 1: running eval data processing (cap year={max_year})...")
     run_eval_processing(
@@ -44,6 +46,7 @@ def run_eval_pipeline(
         nbhd_path=nbhd_path,
         nfhd_raw_path=nfhd_raw_path,
         boundary_path=boundary_path,
+        shooting_path=shooting_path,
         output_dir=output_dir,
         max_year=max_year,
     )
@@ -53,10 +56,11 @@ def run_eval_pipeline(
     boundary_gdf = load_boundaries(boundary_path)
     area_df = compute_area_features(boundary_gdf)
 
-    ped = pd.read_csv(output_dir / "ped_clean_test.csv")
+    ped = pd.read_csv(year_dir / "ped_clean_test.csv")
     subway = pd.read_csv(subway_path)
-    nbhd = pd.read_csv(output_dir / "nbhd_clean_test.csv")
-    storefront_feat = pd.read_csv(output_dir / "storefront_features_test.csv")
+    nbhd = pd.read_csv(year_dir / "nbhd_clean_test.csv")
+    storefront_feat = pd.read_csv(year_dir / "storefront_features_test.csv")
+    shooting_feat = pd.read_csv(year_dir / "shooting_features_test.csv")
 
     ped_joined = spatial_join_points(ped, boundary_gdf)
     subway_joined = spatial_join_points(subway, boundary_gdf)
@@ -68,14 +72,12 @@ def run_eval_pipeline(
         area_df=area_df,
         ped_feat=ped_feat,
         subway_feat=subway_feat,
-        shooting_feat=area_df.assign(shooting_incident_count=0)[
-            ["neighborhood", "cd", "borough", "shooting_incident_count"]
-        ],
+        shooting_feat=shooting_feat,
         nbhd_clean=nbhd,
         storefront_feat=storefront_feat,
     )
 
-    final_df.to_csv(output_dir / "neighborhood_features_final.csv", index=False)
+    final_df.to_csv(year_dir / "neighborhood_features_final_test.csv", index=False)
 
     print("Feature engineering finished.")
     print("Final feature table shape:", final_df.shape)

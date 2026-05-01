@@ -45,7 +45,7 @@ from config import (  # noqa: E402
     load_neighborhood_features,
 )
 
-# â”€â”€ Page config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 st.set_page_config(
     page_title="K-Selection - Clustering",
@@ -59,7 +59,7 @@ st.caption(
     "Run **K-Selection Analysis** to refresh labels used on the **Ranking** page."
 )
 
-# â”€â”€ Load data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 
 df_full = load_neighborhood_features()
@@ -68,7 +68,7 @@ activity_density_features = clustering_density_feature_options(df_full)
 CANDIDATE_FEATURES: list[str] = BASE_CANDIDATE_FEATURES + activity_density_features
 DEFAULT_FEATURES: list[str] = BASE_DEFAULT_FEATURES + activity_density_features
 
-# â”€â”€ Sidebar controls â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 st.sidebar.header("Filters & Settings")
 
@@ -91,14 +91,14 @@ selected_features = st.sidebar.multiselect(
 
 max_k = st.sidebar.slider(
     "Maximum k",
-    min_value=3,
+    min_value=2,
     max_value=15,
     value=8,
     help="Upper bound for the k sweep (same default range as the Next.js K-Selection page). "
     "Automatically capped at (n_neighborhoods - 1).",
 )
 
-# â”€â”€ Apply borough filter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 if not selected_boroughs:
     st.warning("Select at least one borough.")
@@ -126,7 +126,7 @@ if n < 4:
     )
     st.stop()
 
-# â”€â”€ Build feature matrix â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 
 X_raw = df_clean[selected_features].values.astype(float)
@@ -141,7 +141,7 @@ if effective_max_k < max_k:
         f"because you cannot have more clusters than neighborhoods."
     )
 
-# â”€â”€ Run analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 if st.button("Run K-Selection Analysis", type="primary"):
     inertias: list[float] = []
@@ -180,7 +180,7 @@ if st.button("Run K-Selection Analysis", type="primary"):
     st.session_state["ks_features"] = selected_features
     st.session_state["ks_n"] = n
 
-# â”€â”€ Display results (persisted via session state) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---
 
 if "ks_k_range" in st.session_state:
     k_range_s: list[int] = st.session_state["ks_k_range"]
@@ -216,7 +216,7 @@ if "ks_k_range" in st.session_state:
         f"Visualizations use **k = {viz_k}** (sidebar)."
     )
 
-    # â”€â”€ Dual-axis Plotly chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -288,7 +288,7 @@ if "ks_k_range" in st.session_state:
         "**Silhouette** (red) is a separate cue."
     )
 
-    # â”€â”€ Cluster visualization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     st.subheader("Cluster Visualization")
 
@@ -330,7 +330,7 @@ if "ks_k_range" in st.session_state:
 
     col_left, col_right = st.columns(2)
 
-    # â”€â”€ View 1: Feature scatter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     with col_left:
         st.markdown("**Feature Scatter**")
@@ -419,7 +419,7 @@ if "ks_k_range" in st.session_state:
         )
         st.plotly_chart(scatter_fig, use_container_width=True)
 
-    # â”€â”€ View 2: Centroid bar chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     with col_right:
         st.markdown("**Centroid Profiles** *(z-score space)*")
@@ -447,7 +447,7 @@ if "ks_k_range" in st.session_state:
         )
         st.plotly_chart(bar_fig, use_container_width=True)
 
-    # â”€â”€ NYC map (CDTA choropleth) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     st.markdown("**NYC map** *(CDTA polygons filled by cluster)*")
 
@@ -524,7 +524,7 @@ if "ks_k_range" in st.session_state:
             )
             st.plotly_chart(map_fig, use_container_width=True)
 
-    # â”€â”€ Semantic hints from cached embeddings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     st.subheader("Cluster notes (cached embeddings)")
     st.caption(
@@ -563,7 +563,7 @@ if "ks_k_range" in st.session_state:
                         )
                         st.caption(excerpt)
 
-    # â”€â”€ Summary table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     st.subheader("Results table")
     st.caption(
@@ -600,7 +600,7 @@ if "ks_k_range" in st.session_state:
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    # â”€â”€ Feature details â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ---
 
     with st.expander("Feature details", expanded=False):
         st.markdown(

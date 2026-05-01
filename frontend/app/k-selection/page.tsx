@@ -430,7 +430,7 @@ export default function KSelectionPage() {
             <Slider
               label="Maximum k"
               value={maxK}
-              min={3}
+              min={2}
               max={15}
               onChange={(v) => {
                 setMaxK(v);

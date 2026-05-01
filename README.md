@@ -8,32 +8,32 @@ A data-driven decision-support system for exploring and ranking commercial locat
 
 This project integrates NYC Open Data (pedestrian counts, subway stations, storefront vacancy filings) and **NYC Public Neighborhood Profiles**–style community statistics, aggregated to **CDTA** boundaries, to model neighborhood-level commercial environments.
 
-`**streamlit run app.py`** opens **K-Selection / clustering** (`app.py`). The **Ranking** UI is `**pages/Ranking.py`**: **hard SQL filters**, then **α·semantic + β·competitive penalty** — MinMax on the filtered rows for **[cosine similarity, −log1p(count/(avg_pedestrian+1))]** (overall filings or a chosen `act_*_storefront` column; same as `**/api/rank`**), with one **α** slider and a **Claude** panel that explains the **fixed top 5** from that blend (`**/api/agent`** parity).
+**`streamlit run app.py`** opens **K-Selection / clustering** (`app.py`). The **Ranking** UI is **`pages/Ranking.py`**: **hard SQL filters**, then **α·semantic + β·competitive penalty** — MinMax on the filtered rows for **[cosine similarity, −log1p(count/(avg_pedestrian+1))]** (overall filings or a chosen `act_*_storefront` column; same as **`/api/rank`**), with one **α** slider and a **Claude** panel that explains the **fixed top 5** from that blend (**`/api/agent`** parity).
 
 ### Data sources
 
-Inputs live under `**data/raw/**` and are joined to **CDTA 2020** polygons (NYC Planning boundaries: footprint, `**area_km2`**, spatial joins). `**run_pipeline.py**` wires paths to each source.
+Inputs live under **`data/raw/`** and are joined to **CDTA 2020** polygons (NYC Planning boundaries: footprint, **`area_km2`**, spatial joins). **`run_pipeline.py`** wires paths to each source.
 
-- **Mobility** — DOT bi-annual pedestrian counts → per-CDTA foot traffic (`**avg_pedestrian`**, `**peak_pedestrian**`, etc.); MTA/NYS subway station points → `**subway_station_count**`, `**subway_density_per_km2**`, `**transit_activity_score**` inputs.
-- **Community and economic context** — Comptroller **Neighborhood Economic Profiles** (ACS-style jobs, demographics, income, education, commute); **Neighborhood Financial Health** indicators → `**nfh_*`** when that feed is present.
-- **Commerce and public safety** — City storefront vacancy / activity filings → `**storefront_*`**, `**act_*_storefront**`, category mix, `**competitive_score**`, `**commercial_activity_score**`; NYPD shooting points → per-CDTA shooting totals in the feature table.
+- **Mobility** — DOT bi-annual pedestrian counts → per-CDTA foot traffic (**`avg_pedestrian`**, **`peak_pedestrian`**, etc.); MTA/NYS subway station points → **`subway_station_count`**, **`subway_density_per_km2`**, **`transit_activity_score`** inputs.
+- **Community and economic context** — Comptroller **Neighborhood Economic Profiles** (ACS-style jobs, demographics, income, education, commute); **Neighborhood Financial Health** indicators → **`nfh_*`** when that feed is present.
+- **Commerce and public safety** — City storefront vacancy / activity filings → **`storefront_*`**, **`act_*_storefront`**, category mix, **`competitive_score`**, **`commercial_activity_score`**; NYPD shooting points → per-CDTA shooting totals in the feature table.
 
-The pipeline writes `**data/processed/neighborhood_features_final.csv**` (one row per CDTA) for clustering, ranking, and embeddings. **Exact filenames, layout, and where to download:** see `**data/raw/README.MD`** and the `**data/raw/**` tree.
+The pipeline writes **`data/processed/neighborhood_features_final.csv`** (one row per CDTA) for clustering, ranking, and embeddings. **Exact filenames, layout, and where to download:** see **`data/raw/README.MD`** and the **`data/raw/`** tree.
 
 ---
 
 ## End-to-end data flow
 
 1. **Raw data** in `data/raw/` (CSVs + CDTA shapefile under `nyc_boundaries/`). See `data/raw/README.MD`.
-2. `**python run_pipeline.py`** — `src/data_processing.py` cleans sources (including the **Neighborhood Financial Health** / NFH CSV merged into `nbhd_clean`); `src/feature_engineering.py` reads **raw** storefront filings (path configured in `run_pipeline.py`), spatially aggregates **storefront** counts by CDTA and primary business activity, merges **MOCEJ-style neighborhood profiles** and `**nfh_*` columns** on a normalized Community District key, then **imputes** remaining gaps in those merged numeric columns with **borough median, then citywide median** (dashboard-friendly proxy where a CDTA does not match a single profile row). `**commercial_activity_score`** = `**log1p**`(`storefront_filing_count` × `avg_pedestrian`) and `**transit_activity_score**` = `**log1p**`(`subway_station_count` × `avg_pedestrian`), computed **after** filling missing storefront/subway/pedestrian inputs (inner product clipped at 0 before `log1p`) so scores are not stuck at zero from ordering alone and heavy tails are compressed for **hard-filter** sliders. (**Soft** ranking on the dashboard uses **semantic + competitive** — see Ranking section — not a MinMax of `commercial_activity_score`.) Output: `**data/processed/neighborhood_features_final.csv`**. A healthy run ends with **no missing values** in that table; if any column still has NaN, investigate before shipping.
-3. **Embeddings (for the app)** — `python -m src.embeddings` builds embeddings from neighborhood text profiles (including **every non-zero `act_*_storefront`** business-activity count, population proxies, and NFH fields where present — see `data/processed/README.md`); caches under `outputs/embeddings/`. **Default** (`EMBEDDING_BACKEND` unset or `auto`): **OpenAI** `text-embedding-3-small` if `OPENAI_API_KEY` is set, else **local sentence-transformers**. `**EMBEDDING_BACKEND=openai`** uses OpenAI when a key is present, otherwise falls back like auto. `**EMBEDDING_BACKEND=sentence_transformers**` forces local only. Use `**--force**` after changing features or profile text so embeddings match the CSV.
-4. `**streamlit run app.py**` — **Home = K-Selection / clustering** (`app.py`); **Ranking** is `**pages/Ranking.py`** (hard filters, **α·semantic + β·competitive** blend, map, Claude). Loads the feature table (cached; **Rerun** or **Clear cache** after regenerating the CSV). The **Next.js** app on Vercel calls the same `**/api/cluster`**, `**/api/filter**`, `**/api/rank**`, and `**/api/agent**` endpoints when `NEXT_PUBLIC_API_URL` points at the FastAPI backend.
+2. **`python run_pipeline.py`** — `src/data_processing.py` cleans sources (including the **Neighborhood Financial Health** / NFH CSV merged into `nbhd_clean`); `src/feature_engineering.py` reads **raw** storefront filings (path configured in `run_pipeline.py`), spatially aggregates **storefront** counts by CDTA and primary business activity, merges **MOCEJ-style neighborhood profiles** and **`nfh_*`** columns on a normalized Community District key, then **imputes** remaining gaps in those merged numeric columns with **borough median, then citywide median** (dashboard-friendly proxy where a CDTA does not match a single profile row). **`commercial_activity_score`** = **`log1p`**(`storefront_filing_count` × `avg_pedestrian`) and **`transit_activity_score`** = **`log1p`**(`subway_station_count` × `avg_pedestrian`), computed **after** filling missing storefront/subway/pedestrian inputs (inner product clipped at 0 before `log1p`) so scores are not stuck at zero from ordering alone and heavy tails are compressed for **hard-filter** sliders. (**Soft** ranking on the dashboard uses **semantic + competitive** — see Ranking section — not a MinMax of `commercial_activity_score`.) Output: **`data/processed/neighborhood_features_final.csv`**. A healthy run ends with **no missing values** in that table; if any column still has NaN, investigate before shipping.
+3. **Embeddings (for the app)** — `python -m src.embeddings` builds embeddings from neighborhood text profiles (including **every non-zero `act_*_storefront`** business-activity count, population proxies, and NFH fields where present — see `data/processed/README.md`); caches under `outputs/embeddings/`. **Default** (`EMBEDDING_BACKEND` unset or `auto`): **OpenAI** `text-embedding-3-small` if `OPENAI_API_KEY` is set, else **local sentence-transformers**. **`EMBEDDING_BACKEND=openai`** uses OpenAI when a key is present, otherwise falls back like auto. **`EMBEDDING_BACKEND=sentence_transformers`** forces local only. Use **`--force`** after changing features or profile text so embeddings match the CSV.
+4. **`streamlit run app.py`** — **Home = K-Selection / clustering** (`app.py`); **Ranking** is **`pages/Ranking.py`** (hard filters, **α·semantic + β·competitive** blend, map, Claude). Loads the feature table (cached; **Rerun** or **Clear cache** after regenerating the CSV). The **Next.js** app on Vercel calls the same **`/api/cluster`**, **`/api/filter`**, **`/api/rank`**, and **`/api/agent`** endpoints when `NEXT_PUBLIC_API_URL` points at the FastAPI backend.
 
 ---
 
 ## Streamlit: Ranking page (`pages/Ranking.py`)
 
-The ranking dashboard reads `**data/processed/neighborhood_features_final.csv**` (cached).
+The ranking dashboard reads **`data/processed/neighborhood_features_final.csv`** (cached).
 
 ### 1. Hard filters (deterministic)
 
@@ -41,28 +41,28 @@ Sidebar controls set thresholds on:
 
 - **Borough** (multiselect)
 - **Minimum** `subway_station_count`, `avg_pedestrian`, `storefront_density_per_km2`, `storefront_filing_count`, `commercial_activity_score`
-- **Maximum** `competitive_score` (competition pressure — same column used in `**competitive_score`** hard filter on `**/api/filter**` / `**/api/rank**`)
+- **Maximum** `competitive_score` (competition pressure — same column used in **`competitive_score`** hard filter on **`/api/filter`** / **`/api/rank`**)
 - **Maximum** shooting-incident count (column name may be `shooting_incident_count` or `shooting_incident_count_2024` depending on the pipeline export)
 - **NFH thresholds** (`nfh_overall_score` / `nfh_goal4_fin_shocks_score`): minimum thresholds via sidebar sliders (shown only when those columns exist and have values)
 
-These are applied with **DuckDB** using **parameterized** `WHERE` clauses (same binding idea as the FastAPI backend): the full table is registered as `nbhd`, a `SELECT … WHERE …` runs, and rows are ordered by `**commercial_activity_score` DESC** for the **hard-filter preview** table. The main area shows a table of surviving neighborhoods (key columns). **View generated SQL** expands to show the exact query. An expander (**About zeros, nulls, and refreshing data**) documents imputation, score formulas, and when zeros are expected.
+These are applied with **DuckDB** using **parameterized** `WHERE` clauses (same binding idea as the FastAPI backend): the full table is registered as `nbhd`, a `SELECT … WHERE …` runs, and rows are ordered by **`commercial_activity_score` DESC** for the **hard-filter preview** table. The main area shows a table of surviving neighborhoods (key columns). **View generated SQL** expands to show the exact query. An expander (**About zeros, nulls, and refreshing data**) documents imputation, score formulas, and when zeros are expected.
 
 If no rows match, the app stops with a warning.
 
 ### 2. Soft preferences — two-way ranking (in-app “ranking”)
 
 - User enters a **free-text** query (ideal area description).
-- **One blend slider** sets **α ∈ [0, 1]** for **semantic similarity** (cosine similarity after MinMax on the filtered set). **β = 1 − α** applies to a **competitive-pressure** signal derived from `**log1p(count / (avg_pedestrian + 1))`**, where `**count**` is either total `**storefront_filing_count**` or a selected `**act_*_storefront**` column (same behavior as the Next.js app calling `**/api/rank**`). Higher competition penalizes rank, so the second axis uses **MinMax(−competitive)** before blending. No second slider; **α + β = 1** by construction.
+- **One blend slider** sets **α ∈ [0, 1]** for **semantic similarity** (cosine similarity after MinMax on the filtered set). **β = 1 − α** applies to a **competitive-pressure** signal derived from **`log1p(count / (avg_pedestrian + 1))`**, where **`count`** is either total **`storefront_filing_count`** or a selected **`act_*_storefront`** column (same behavior as the Next.js app calling **`/api/rank`**). Higher competition penalizes rank, so the second axis uses **MinMax(−competitive)** before blending. No second slider; **α + β = 1** by construction.
 - **Embeddings:** query and neighborhoods use the active backend in `src/embeddings.py` — by default **OpenAI `text-embedding-3-small`** when `OPENAI_API_KEY` is set, else **local sentence-transformers** (`all-MiniLM-L6-v2`); or whichever backend you force with `EMBEDDING_BACKEND`. **Cosine similarity** is computed on the filtered set (aligned by neighborhood name to the full embedding matrix).
-- Build a matrix **cosine_sim, −competitive** for those rows and apply `**sklearn.preprocessing.MinMaxScaler`** (column-wise, **0–1** on the filtered set). With a **single** row, scaling falls back to a neutral mid-score to avoid degenerate MinMax.
-- `**blended_score = α·col0 + β·col1`**. Sort by `**blended_score**` descending. The table shows `**semantic_similarity**`, `**specific_competitive_score**` (the `log1p` competitive scalar used in the blend), and `**blended_score**`. (`**commercial_activity_score**` remains available for **hard filters** and the hard-filter table sort, not as the soft-ranking second axis.)
-- **Map (when embeddings succeed):** a **CDTA choropleth** colors polygons by `**blended_score`** (sequential greens; requires `data/raw/nyc_boundaries/nycdta2020.shp`).
+- Build a matrix **cosine_sim, −competitive** for those rows and apply **`sklearn.preprocessing.MinMaxScaler`** (column-wise, **0–1** on the filtered set). With a **single** row, scaling falls back to a neutral mid-score to avoid degenerate MinMax.
+- **`blended_score = α·col0 + β·col1`**. Sort by **`blended_score`** descending. The table shows **`semantic_similarity`**, **`specific_competitive_score`** (the `log1p` competitive scalar used in the blend), and **`blended_score`**. (**`commercial_activity_score`** remains available for **hard filters** and the hard-filter table sort, not as the soft-ranking second axis.)
+- **Map (when embeddings succeed):** a **CDTA choropleth** colors polygons by **`blended_score`** (sequential greens; requires `data/raw/nyc_boundaries/nycdta2020.shp`).
 
-If embeddings are missing or the API key is unset, this block shows a warning (pre-generate embeddings with `python -m src.embeddings`; use `**--force**` after feature or profile text changes).
+If embeddings are missing or the API key is unset, this block shows a warning (pre-generate embeddings with `python -m src.embeddings`; use **`--force`** after feature or profile text changes).
 
 ### 3. AI analysis
 
-A button sends **Claude** the **fixed top 5** neighborhoods from the soft ranker (same rules as `**/api/agent`**) plus the **hard-filtered** dataframe. The agent may call `**run_sql`** only for **extra context** on those five — it must **not** re-rank or replace them. Requires `**ANTHROPIC_API_KEY`**.
+A button sends **Claude** the **fixed top 5** neighborhoods from the soft ranker (same rules as **`/api/agent`**) plus the **hard-filtered** dataframe. The agent may call **`run_sql`** only for **extra context** on those five — it must **not** re-rank or replace them. Requires **`ANTHROPIC_API_KEY`**.
 
 ### 4. What is *not* in the Streamlit ranker
 
@@ -119,7 +119,7 @@ The baseline dashboard relies on transparent filters plus scores from the featur
 | ------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Data pipeline                   | `src/data_processing.py`, `src/feature_engineering.py`, `run_pipeline.py` | Produces `neighborhood_features_final.csv`                                                                                                                                                             |
 | Embeddings                      | `src/embeddings.py`                                                       | Text profiles → `.npy` cache (OpenAI or sentence-transformers)                                                                                                                                         |
-| K-Selection / clustering (home) | `app.py`                                                                  | Thin Streamlit page: K sweep, viz, CDTA map. Heavy logic lives in `streamlit_app/cluster_helpers.py` (which re-uses `api/cluster_helpers.py`). Elbow heuristics match `**/api/cluster`** (perpendicular-distance `elbow_k`, Δ² inertia `elbow_k_kneedle`); writes cluster labels + descriptions to session state |
+| K-Selection / clustering (home) | `app.py`                                                                  | Thin Streamlit page: K sweep, viz, CDTA map. Heavy logic lives in `streamlit_app/cluster_helpers.py` (which re-uses `api/cluster_helpers.py`). Elbow heuristics match **`/api/cluster`** (perpendicular-distance `elbow_k`, Δ² inertia `elbow_k_kneedle`); writes cluster labels + descriptions to session state |
 | Ranking                         | `pages/Ranking.py`                                                        | Hard filters, MinMax **[semantic, −competitive]** (**one α**), map, Claude (fixed top 5), cluster join                                                                                                 |
 | FastAPI backend                 | `api/main.py`                                                             | Slim endpoint layer; all SQL building, ranking, clustering and description logic now lives in `api/rank_helpers.py`, `api/cluster_helpers.py`, and `api/formatting.py` (shared with Streamlit)         |
 | Shared cluster + rank helpers   | `api/cluster_helpers.py`, `api/rank_helpers.py`, `api/formatting.py`      | Single source of truth for elbow detection, rich cluster descriptions (`_cluster_rich_description`, `_cluster_title`, `_activity_category_profile`), DuckDB SQL building, and feature-name pretty-printing. Imported by **both** FastAPI and the Streamlit app |
@@ -151,9 +151,9 @@ app.py           Streamlit entry: **K-Selection / clustering** home (`streamlit 
 
 | Document                       | Purpose                                                               |
 | ------------------------------ | --------------------------------------------------------------------- |
-| `**README.md**` (this file)    | Setup, Streamlit behavior, API keys, troubleshooting                  |
-| `**data/raw/README.MD**`       | Where to obtain raw CSVs and CDTA shapefile; layout under `data/raw/` |
-| `**data/processed/README.md**` | Processed CSVs, final feature columns, app + embedding pipeline       |
+| **`README.md`** (this file)    | Setup, Streamlit behavior, API keys, troubleshooting                  |
+| **`data/raw/README.MD`**       | Where to obtain raw CSVs and CDTA shapefile; layout under `data/raw/` |
+| **`data/processed/README.md`** | Processed CSVs, final feature columns, app + embedding pipeline       |
 
 
 ---
@@ -186,7 +186,7 @@ python -m src.embeddings    # use --force to refresh; OpenAI when OPENAI_API_KEY
 streamlit run app.py        # set ANTHROPIC_API_KEY to enable the Claude panel
 ```
 
-Copy `**.env.example**` to `**.env**` and set API keys as needed: `**OPENAI_API_KEY**` selects OpenAI embeddings when not forcing local-only; omit the key to use sentence-transformers. `**ANTHROPIC_API_KEY**` enables the Claude panel.
+Copy **`.env.example`** to **`.env`** and set API keys as needed: **`OPENAI_API_KEY`** selects OpenAI embeddings when not forcing local-only; omit the key to use sentence-transformers. **`ANTHROPIC_API_KEY`** enables the Claude panel.
 
 ---
 
@@ -212,7 +212,7 @@ K-means is implemented from scratch in `src/kmeans_numpy.py` (Euclidean distance
 pytest tests/
 ```
 
-Includes `**tests/test_kmeans.py**` and `**tests/test_feature_engineering.py**`. Utility scripts under `**scripts/**` are not run by CI unless you add them.
+Includes **`tests/test_kmeans.py`** and **`tests/test_feature_engineering.py`**. Utility scripts under **`scripts/`** are not run by CI unless you add them.
 
 ### Rank-stability validation (interactive HTML)
 
@@ -235,9 +235,9 @@ Open them in the file explorer to interact with the scatter plots!
 
 ## Data & live demo
 
-- `**data/processed/**` is **committed** so you can run `**streamlit run app.py`** without rebuilding features. Re-run `**python run_pipeline.py**` after changing pipeline code or raw inputs.
-- `**data/raw/**` CSVs are **not committed** (download locally; see `data/raw/README.MD`). The **CDTA 2020 shapefile** under `**data/raw/nyc_boundaries/nycdta2020.*`** **is committed** (~1.5MB) so spatial joins work out of the box.
-- **Regenerate processed tables:** `python run_pipeline.py` (requires `**geopandas`**, local CSVs as above, and the repo shapefile path).
+- **`data/processed/`** is **committed** so you can run **`streamlit run app.py`** without rebuilding features. Re-run **`python run_pipeline.py`** after changing pipeline code or raw inputs.
+- **`data/raw/`** CSVs are **not committed** (download locally; see `data/raw/README.MD`). The **CDTA 2020 shapefile** under **`data/raw/nyc_boundaries/nycdta2020.*`** **is committed** (~1.5MB) so spatial joins work out of the box.
+- **Regenerate processed tables:** `python run_pipeline.py` (requires **`geopandas`**, local CSVs as above, and the repo shapefile path).
 
 ## Notes
 
@@ -251,7 +251,7 @@ Open them in the file explorer to interact with the scatter plots!
 
 ### Current Limitations
 
-- **Linear scoring function (α blend).** Rankings use `α · semantic_similarity + (1 − α) · MinMax(−competitive)` on the filtered set (same as `**/api/rank`**). This is transparent and easy to tune, but cannot capture interactions between features (e.g. "subway access matters *only* for high-pedestrian areas") or non-monotonic preferences.
+- **Linear scoring function (α blend).** Rankings use `α · semantic_similarity + (1 − α) · MinMax(−competitive)` on the filtered set (same as **`/api/rank`**). This is transparent and easy to tune, but cannot capture interactions between features (e.g. "subway access matters *only* for high-pedestrian areas") or non-monotonic preferences.
 - **Limited expressiveness of the semantic query.** Users can write queries such as *"quiet residential area for retail with good subway access and good safety"* and the system handles them well at the neighborhood-character level. However, it is difficult to express:
   - **Fine-grained retail categories** (e.g. "specialty bookstore" vs. generic "retail").
   - **Niche restaurant types** (e.g. "Sichuan hot pot only" or "third-wave coffee").
@@ -278,7 +278,7 @@ The repo also ships as a two-tier web app: **FastAPI on Railway** (Python pipeli
 
 ### 1. Backend on Railway
 
-1. `**api/main.py*`* is the FastAPI app — endpoints `/api/health`, `/api/feature-ranges`, `/api/cluster`, `/api/filter`, `/api/rank`, `/api/agent`, `/api/geo/cdta`. Run locally:
+1. **`api/main.py`** is the FastAPI app — endpoints `/api/health`, `/api/feature-ranges`, `/api/cluster`, `/api/filter`, `/api/rank`, `/api/agent`, `/api/geo/cdta`. Run locally:
   ```bash
    uv pip install -r requirements.txt
    uvicorn api.main:app --reload --port 8000
@@ -312,7 +312,7 @@ To set up:
 
 ### 2. Frontend on Vercel
 
-The frontend is a stand-alone Next.js 14 (App Router, TypeScript, Tailwind) app under `**frontend/**`.
+The frontend is a stand-alone Next.js 14 (App Router, TypeScript, Tailwind) app under **`frontend/`**.
 
 ```bash
 cd frontend
@@ -325,7 +325,7 @@ To deploy:
 
 1. On [vercel.com](https://vercel.com) → **Add New Project → Import Git Repository**, point at this repo.
 2. **Set the Root Directory to `frontend/`** in project settings (otherwise Vercel will try to build from the repo root and fail on the Python files).
-3. Add the env var `**NEXT_PUBLIC_API_URL**` = `https://<your-railway-app>.up.railway.app` (no trailing slash).
+3. Add the env var **`NEXT_PUBLIC_API_URL`** = `https://<your-railway-app>.up.railway.app` (no trailing slash).
 4. Vercel auto-detects Next.js and uses `npm run build`. Pushes to `main` deploy to production; PR branches get preview URLs.
 
 Once deployed, copy the production Vercel URL back into Railway's `FRONTEND_ORIGINS` so CORS allows it.
@@ -336,4 +336,10 @@ Once deployed, copy the production Vercel URL back into Railway's `FRONTEND_ORIG
 - **CDTA boundaries** ship as a pre-rendered `data/processed/cdta_geo.json` (~4 MB) so Railway doesn't need geopandas. Regenerate locally with `uv run python scripts/build_cdta_geojson.py` after editing the shapefile (requires geopandas — installed via `requirements-dev.txt`).
 - **The clustering "Run Analysis" call recomputes K-means on every request.** For the 71-CDTA dataset this is sub-second; if you swap in a larger feature table, add server-side caching keyed on `(features, max_k, vintage, boroughs)`.
 - The Streamlit app (`app.py`) and the FastAPI app share **two** layers of common code: (1) `src/` modules (pipeline, embeddings, K-means, agent), and (2) `api/cluster_helpers.py` + `api/rank_helpers.py` + `api/formatting.py` (elbow heuristics, rich cluster descriptions, DuckDB SQL building, label formatting). `streamlit_app/cluster_helpers.py` is a thin wrapper that re-exports those helpers for the Streamlit page so logic does not drift between interfaces — when you touch ranking, clustering, or description text, edit the `api/*_helpers.py` module, not the Streamlit page. The Streamlit-specific `@st.cache_data` import in `src/config.py` is wrapped in try/except so the FastAPI deploy doesn't need streamlit installed.
+
+### Live deployments
+
+1. **Vercel (public dashboard)** — Production Next.js app: **[https://nyc-commercial-intelligence.vercel.app/](https://nyc-commercial-intelligence.vercel.app/)**. Stack matches `frontend/`: Next.js 14 (App Router), TypeScript, Tailwind CSS; it calls the FastAPI API via `NEXT_PUBLIC_API_URL` (Railway in production).
+
+2. **Streamlit Community Cloud** — K-selection / clustering UI: **[https://nyc-commercial-intelligence.streamlit.app/](https://nyc-commercial-intelligence.streamlit.app/)**.
 

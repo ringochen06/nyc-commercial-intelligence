@@ -1,19 +1,21 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import type { ComponentType } from "react";
 import type { Data, Layout } from "plotly.js";
+import type { PlotParams } from "react-plotly.js";
 
 // Factory pattern: use plotly.js-dist-min (installed) instead of the full
 // plotly.js bundle that react-plotly.js's default entry requires.
 const Plot = dynamic(
   async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const factory: any = await import("react-plotly.js/factory");
+    const createPlotlyComponent = (await import("react-plotly.js/factory"))
+      .default;
     const Plotly = (await import("plotly.js-dist-min")).default;
-    return (factory.default ?? factory)(Plotly);
+    return createPlotlyComponent(Plotly);
   },
   { ssr: false }
-);
+) as ComponentType<PlotParams>;
 
 interface Props {
   data: Data[];

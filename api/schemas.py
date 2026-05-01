@@ -81,7 +81,9 @@ class HardFilters(BaseModel):
 
 
 class RankRequest(BaseModel):
-    query: str = Field("quiet residential area suitable for boutique retail with good subway access")
+    query: str = Field(
+        "quiet residential area suitable for retail with good subway access and good NFH stability"
+    )
     alpha: float = Field(0.8, ge=0.0, le=1.0, description="Semantic weight; competitive weight = 1 - alpha.")
     filters: HardFilters = HardFilters()
     vintage: Vintage = Field(

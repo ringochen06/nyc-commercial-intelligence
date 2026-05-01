@@ -18,7 +18,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const DEFAULT_QUERY =
-  "quiet residential area suitable for boutique retail with good subway access";
+  "quiet residential area suitable for retail with good subway access and good NFH stability";
 
 const fmt = (v: number | null | undefined, digits: number): string =>
   typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—";

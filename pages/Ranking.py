@@ -43,7 +43,7 @@ from config import (  # noqa: E402
 from feature_engineering import is_act_storefront_column  # noqa: E402
 
 DEFAULT_SOFT_QUERY = (
-    "quiet residential area suitable for boutique retail with good subway access"
+    "quiet residential area suitable for retail with good subway access and good NFH stability"
 )
 DEFAULT_ALPHA_SEMANTIC = 0.8
 
@@ -68,9 +68,11 @@ df_full = load_neighborhood_features()
 SHOOTING_COUNT_COL = (
     "shooting_incident_count"
     if "shooting_incident_count" in df_full.columns
-    else "shooting_incident_count_2024"
-    if "shooting_incident_count_2024" in df_full.columns
-    else None
+    else (
+        "shooting_incident_count_2024"
+        if "shooting_incident_count_2024" in df_full.columns
+        else None
+    )
 )
 
 # ── Sidebar: Hard Filters ──────────────────────────────────────────────────
@@ -229,54 +231,96 @@ if has_nfh_overall and df_full["nfh_overall_score"].notna().any():
 # ── Apply hard filters with DuckDB ─────────────────────────────────────────
 
 
-def apply_hard_filters(df: pd.DataFrame) -> pd.DataFrame:
-    """Build and execute a DuckDB SQL query from sidebar filter values."""
+def _interpolate_sql(sql: str, params: list) -> str:
+    """Inline ``?`` placeholders for display only (FastAPI `/api/filter` parity)."""
+    parts = sql.split("?")
+    if len(parts) - 1 != len(params):
+        return sql
+    out: list[str] = [parts[0]]
+    for i, value in enumerate(params):
+        if value is None:
+            literal = "NULL"
+        elif isinstance(value, bool):
+            literal = "TRUE" if value else "FALSE"
+        elif isinstance(value, int):
+            literal = str(value)
+        elif isinstance(value, float):
+            literal = f"{int(value)}" if float(value).is_integer() else f"{value:g}"
+        else:
+            s = str(value).replace("'", "''")
+            literal = f"'{s}'"
+        out.append(literal)
+        out.append(parts[i + 1])
+    return "".join(out)
+
+
+def _top5_markdown_for_agent(blend_df: pd.DataFrame) -> str:
+    header = (
+        "| # | neighborhood | semantic_similarity | specific_competitive_score | blended_score |\n"
+        "|---|---|---|---|---|\n"
+    )
+    body = "\n".join(
+        f"| {int(row['rank'])} | {row['neighborhood']} | {float(row['semantic_similarity']):.4f} | "
+        f"{float(row['specific_competitive_score']):.4f} | {float(row['blended_score']):.4f} |"
+        for _, row in blend_df.head(5).iterrows()
+    )
+    return header + body
+
+
+def apply_hard_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, str, list]:
+    """Parameterized DuckDB query (same binding style as `api.main._build_sql`)."""
     con = duckdb.connect()
     con.register("nbhd", df)
 
-    borough_list = ", ".join(f"'{b}'" for b in selected_boroughs)
-    sql = f"""
-        SELECT *
-        FROM nbhd
-        WHERE borough IN ({borough_list})
-          AND subway_station_count >= {subway_range}
-          AND avg_pedestrian >= {ped_threshold}
-          AND storefront_density_per_km2 >= {density_threshold}
-          AND storefront_filing_count >= {poi_threshold}
-          AND commercial_activity_score >= {comm_threshold}
-          AND competitive_score <= {comp_max_threshold}
-          {"AND " + SHOOTING_COUNT_COL + " <= " + str(float(crime_max_threshold)) if (SHOOTING_COUNT_COL is not None and crime_max_threshold is not None) else ""}
-          {"AND nfh_goal4_fin_shocks_score >= " + str(float(nfh_goal4_threshold)) if nfh_goal4_threshold is not None else ""}
-          {"AND nfh_overall_score >= " + str(float(nfh_overall_threshold)) if nfh_overall_threshold is not None else ""}
-        ORDER BY commercial_activity_score DESC
-    """
+    where: list[str] = []
+    params: list = []
 
-    result = con.execute(sql).fetchdf()
+    ph = ", ".join(["?"] * len(selected_boroughs))
+    where.append(f"borough IN ({ph})")
+    params.extend(selected_boroughs)
+
+    where.append("subway_station_count >= ?")
+    params.append(float(subway_range))
+    where.append("avg_pedestrian >= ?")
+    params.append(float(ped_threshold))
+    where.append("storefront_density_per_km2 >= ?")
+    params.append(float(density_threshold))
+    where.append("storefront_filing_count >= ?")
+    params.append(float(poi_threshold))
+    where.append("commercial_activity_score >= ?")
+    params.append(float(comm_threshold))
+    where.append("competitive_score <= ?")
+    params.append(float(comp_max_threshold))
+
+    if SHOOTING_COUNT_COL is not None and crime_max_threshold is not None:
+        where.append(f"{SHOOTING_COUNT_COL} <= ?")
+        params.append(float(crime_max_threshold))
+    if nfh_goal4_threshold is not None:
+        where.append("nfh_goal4_fin_shocks_score >= ?")
+        params.append(float(nfh_goal4_threshold))
+    if nfh_overall_threshold is not None:
+        where.append("nfh_overall_score >= ?")
+        params.append(float(nfh_overall_threshold))
+
+    sql = (
+        "SELECT * FROM nbhd WHERE "
+        + " AND ".join(where)
+        + " ORDER BY commercial_activity_score DESC"
+    )
+    result = con.execute(sql, params).fetchdf()
     con.close()
-    return result
+    return result, sql, params
 
 
-df_filtered = apply_hard_filters(df_full)
+df_filtered, _hard_sql_template, _hard_sql_params = apply_hard_filters(df_full)
 
 # ── Show hard-filter results ────────────────────────────────────────────────
 
 st.subheader(f"Hard-filtered neighborhoods ({len(df_filtered)} of {len(df_full)})")
 
 with st.expander("View generated SQL", expanded=False):
-    borough_list_display = ", ".join(f"'{b}'" for b in selected_boroughs)
     st.code(
-        f"SELECT * FROM neighborhoods\n"
-        f"WHERE borough IN ({borough_list_display})\n"
-        f"  AND subway_station_count >= {subway_range}\n"
-        f"  AND avg_pedestrian >= {ped_threshold}\n"
-        f"  AND storefront_density_per_km2 >= {density_threshold}\n"
-        f"  AND storefront_filing_count >= {poi_threshold}\n"
-        f"  AND commercial_activity_score >= {comm_threshold}\n"
-        f"  AND competitive_score <= {comp_max_threshold}\n"
-        f"{'  AND ' + SHOOTING_COUNT_COL + ' <= ' + str(float(crime_max_threshold)) + chr(10) if (SHOOTING_COUNT_COL is not None and crime_max_threshold is not None) else ''}"
-        f"{'  AND nfh_goal4_fin_shocks_score >= ' + str(float(nfh_goal4_threshold)) + chr(10) if nfh_goal4_threshold is not None else ''}"
-        f"{'  AND nfh_overall_score >= ' + str(float(nfh_overall_threshold)) + chr(10) if nfh_overall_threshold is not None else ''}"
-        f"ORDER BY commercial_activity_score DESC;",
+        _interpolate_sql(_hard_sql_template, _hard_sql_params),
         language="sql",
     )
 
@@ -307,7 +351,9 @@ display_cols.extend(
     ]
 )
 if SHOOTING_COUNT_COL is not None:
-    display_cols.insert(display_cols.index("commercial_activity_score"), SHOOTING_COUNT_COL)
+    display_cols.insert(
+        display_cols.index("commercial_activity_score"), SHOOTING_COUNT_COL
+    )
 for optional_col in ["nfh_overall_score", "nfh_goal4_fin_shocks_score"]:
     if optional_col in df_filtered.columns:
         display_cols.append(optional_col)
@@ -415,7 +461,7 @@ selected_competitive_source = st.selectbox(
     ),
 )
 
-# ── Soft ranking: semantic + commercial activity ────────────────────────────
+# ── Soft ranking: semantic + competitive penalty (aligned with `/api/rank`) ──
 
 st.subheader("Soft ranking (α·semantic + β·competitive score)")
 st.caption(
@@ -535,6 +581,19 @@ try:
                 "fill **cluster** and **cluster_description**._"
             )
 
+        _agent_cols = [
+            "rank",
+            "neighborhood",
+            "semantic_similarity",
+            "specific_competitive_score",
+            "blended_score",
+        ]
+        _blend_snap = ranking_df.reset_index()
+        st.session_state["rank_agent_blend_df"] = _blend_snap[
+            [c for c in _agent_cols if c in _blend_snap.columns]
+        ].copy()
+        st.session_state["rank_agent_soft_query"] = soft_query
+
         st.dataframe(ranking_df, use_container_width=True, height=380)
 
         # NYC map: blended score on CDTA polygons (sequential greens)
@@ -614,9 +673,13 @@ try:
                 )
                 st.plotly_chart(map_fig, use_container_width=True)
     else:
+        st.session_state.pop("rank_agent_blend_df", None)
+        st.session_state.pop("rank_agent_soft_query", None)
         st.info("Could not map filtered neighborhoods to embeddings.")
 
 except Exception as e:
+    st.session_state.pop("rank_agent_blend_df", None)
+    st.session_state.pop("rank_agent_soft_query", None)
     st.warning(
         f"Semantic search unavailable (embeddings not cached or embedding backend error): {e}\n\n"
         "Run `python -m src.embeddings` to generate embeddings. Default: OpenAI when `OPENAI_API_KEY` is set, else local sentence-transformers; "
@@ -626,16 +689,55 @@ except Exception as e:
 # ── Claude agent analysis ──────────────────────────────────────────────────
 
 st.subheader("AI analysis (Claude)")
+st.caption(
+    "Same contract as FastAPI **`/api/agent`**: Claude explains the **fixed top 5** from the soft ranker "
+    "(semantic + competitive blend above). It must **not** re-rank or substitute other neighborhoods."
+)
 
-if st.button("Ask Claude to analyze filtered data", type="primary"):
-    with st.spinner("Claude is analyzing the filtered neighborhoods..."):
+if st.button("Ask Claude to explain top 5 (fixed ranking)", type="primary"):
+    with st.spinner("Claude is analyzing the top-ranked neighborhoods..."):
+        blend_store = st.session_state.get("rank_agent_blend_df")
+        query_for_agent = st.session_state.get("rank_agent_soft_query", soft_query)
         try:
+            if blend_store is None or blend_store.empty:
+                raise RuntimeError(
+                    "No soft ranking snapshot — fix embeddings (see warning above) or widen filters."
+                )
+            rank_resp_preview = _top5_markdown_for_agent(blend_store)
+            top5_names = blend_store.head(5)["neighborhood"].astype(str).tolist()
             prompt = (
-                f"The user is looking for: {soft_query}\n\n"
-                f"There are {len(df_filtered)} neighborhoods that passed the hard filters. "
-                f"Use the run_sql tool to explore the data and recommend the top 3-5 "
-                f"neighborhoods that best match the user's soft preferences. "
-                f"Explain your reasoning with specific data points."
+                f"The user's query is:\n\n> {query_for_agent}\n\n"
+                f"The semantic + competitive blended ranker has already produced the "
+                f"final top-5 recommendations. These are FIXED and FINAL — your job is "
+                f"only to explain why each one matches the user's query, **in the exact "
+                f"order given**. Do not re-rank, drop, replace, or reorder them. Do not "
+                f"suggest other neighborhoods.\n\n"
+                f"## Top 5 (final, fixed, ordered)\n\n"
+                f"{rank_resp_preview}\n\n"
+                f"## Your task\n\n"
+                f"Identify the **key intent words** in the user's query (e.g. 'restaurant', "
+                f"'family', 'tech', 'quiet', 'walkable') and map them to the most relevant "
+                f"feature columns (e.g. 'restaurant' → `act_FOOD_SERVICES_storefront`, "
+                f"`food_services`, `avg_pedestrian`, `competitive_score`). For each of the "
+                f"5 neighborhoods (in the same order, highest blended_score → lowest):\n"
+                f"  1. Render the neighborhood name as a bold markdown header (numbered 1–5).\n"
+                f"  2. Write a 2–3 sentence explanation that grounds the recommendation in "
+                f"specific data points from this CDTA — foot traffic, dominant business "
+                f"categories from the act_*_storefront columns, density metrics, the "
+                f"competitive_score, and any other meaningful columns that connect to "
+                f"the user's intent.\n"
+                f"  3. Tie each explanation directly to the user's query — name the intent "
+                f"words and the columns you used.\n\n"
+                f"Avoid generic statements. Every claim must reference a concrete number or "
+                f"category from the data.\n\n"
+                f"You may call the `run_sql` tool to look up additional detail about any of "
+                f"the 5 neighborhoods — but ONLY for retrieving more context, NEVER for "
+                f"ranking, reordering, filtering, or replacing the fixed top 5. The "
+                f"`neighborhoods` table you query is the hard-filtered set ({len(df_filtered)} rows). "
+                f"When you're done, call the `done` tool with the final markdown answer "
+                f"as a numbered list (1–5) with bold neighborhood-name headers.\n\n"
+                f"The 5 neighborhoods you must explain, in this exact order: "
+                f"{', '.join(top5_names)}."
             )
             answer = run_agent(prompt, df_filtered, max_turns=20)
             st.markdown(answer)

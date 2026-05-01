@@ -110,8 +110,9 @@ max_k = st.sidebar.slider(
     "Maximum k",
     min_value=3,
     max_value=15,
-    value=3,
-    help="Upper bound for the k sweep. Automatically capped at (n_neighborhoods − 1).",
+    value=8,
+    help="Upper bound for the k sweep (same default range as the Next.js K-Selection page). "
+    "Automatically capped at (n_neighborhoods − 1).",
 )
 
 # ── Apply borough filter ─────────────────────────────────────────────────────
@@ -190,51 +191,31 @@ CLUSTER_PALETTE: list[str] = [
 
 
 def find_elbow(k_range: list[int], inertias: list[float]) -> int:
-    """Return the k at the elbow using the perpendicular-distance (kneedle) method.
-
-    Normalises both axes to [0,1] and finds the point with the maximum
-    orthogonal distance from the chord connecting the first and last points.
-    """
+    """Same as FastAPI `api.main._find_elbow`: max perpendicular distance to inertia chord (normalized axes)."""
     ks = np.array(k_range, dtype=float)
     ys = np.array(inertias, dtype=float)
-    # Normalize both axes to [0, 1]
     ks_n = (ks - ks.min()) / (ks.max() - ks.min() + 1e-12)
     ys_n = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
-    # Direction vector of the chord from first to last point
     dx = ks_n[-1] - ks_n[0]
     dy = ys_n[-1] - ys_n[0]
     norm = np.sqrt(dx**2 + dy**2) + 1e-12
-    # Perpendicular distance of each point from the chord
-    distances = (
-        np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
-    )
+    distances = np.abs(dy * ks_n - dx * ys_n + ks_n[-1] * ys_n[0] - ys_n[-1] * ks_n[0]) / norm
     return k_range[int(np.argmax(distances))]
 
 
-def find_elbow_minima(k_range: list[int], inertias: list[float]) -> int:
-    """Return the k at the smallest local minimum of the inertia curve.
-
-    A local minimum at index i means inertias[i] < inertias[i-1] and
-    inertias[i] < inertias[i+1].  Among all such points, returns the one
-    with the smallest inertia value (the lowest dip on the curve).
-
-    Falls back to find_elbow() when fewer than 3 points are available or
-    when the curve is strictly monotone (no interior local minimum exists).
-    """
-    if len(k_range) <= 3:
-        return k_range[np.argmin(inertias)]
-
-    ys = np.array(inertias, dtype=float)
-    local_minima = [
-        i for i in range(1, len(ys) - 1) if ys[i] < ys[i - 1] and ys[i] < ys[i + 1]
-    ]
-
-    if not local_minima:
-        return find_elbow(k_range, inertias)
-
-    # Among all local minima, pick the one with the lowest inertia value
-    best_i = min(local_minima, key=lambda i: ys[i])
-    return k_range[best_i]
+def find_elbow_curvature_knee(k_range: list[int], inertias: list[float]) -> int:
+    """Same as FastAPI `api.main._find_elbow_curvature_knee`: k at largest |Δ²(inertia)| (normalized curve)."""
+    ys = np.asarray(inertias, dtype=float)
+    ks = np.asarray(k_range, dtype=float)
+    if ks.size < 3:
+        return int(k_range[0])
+    yn = (ys - ys.min()) / (ys.max() - ys.min() + 1e-12)
+    d2 = np.diff(yn, n=2)
+    if d2.size == 0:
+        return int(k_range[len(k_range) // 2])
+    j = int(np.argmax(np.abs(d2)))
+    mid = min(max(j + 1, 0), len(k_range) - 1)
+    return int(k_range[mid])
 
 
 def _color_for_cluster(c: int) -> str:
@@ -354,8 +335,8 @@ if st.button("Run K-Selection Analysis", type="primary"):
 
     progress.empty()
 
-    elbow_k = find_elbow_minima(k_range, inertias)
-    elbow_k_kneedle = find_elbow(k_range, inertias)
+    elbow_k = find_elbow(k_range, inertias)
+    elbow_k_kneedle = find_elbow_curvature_knee(k_range, inertias)
     best_sil_k = k_range[int(np.argmax(sil_sklearn))]
 
     # Persist to session state so the viz section survives Streamlit reruns
@@ -366,8 +347,8 @@ if st.button("Run K-Selection Analysis", type="primary"):
     st.session_state["ks_elbow_k"] = elbow_k
     st.session_state["ks_elbow_k_kneedle"] = elbow_k_kneedle
     st.session_state["ks_best_sil_k"] = best_sil_k
-    # Default visualization to smallest k in sweep (not an automatic "best").
-    st.session_state["ks_user_k"] = k_range[0]
+    # Match FastAPI: default partition k = perpendicular-distance elbow when user has not chosen yet.
+    st.session_state["ks_user_k"] = elbow_k
     st.session_state["ks_X"] = X
     st.session_state["ks_X_raw"] = X_raw
     st.session_state["ks_df_clean"] = df_clean
@@ -398,14 +379,14 @@ if "ks_k_range" in st.session_state:
         options=k_range_s,
         value=_default_viz_k,
         help="How many clusters to draw on the charts and export to the Ranking page. "
-        "Elbow / silhouette curves are hints only.",
+        "Grey / green elbow markers match FastAPI `/api/cluster`; silhouette is a separate cue.",
         key="ks_viz_k_slider",
     )
     st.session_state["ks_user_k"] = viz_k
 
     st.success(
-        f"Heuristic references — inertia elbow (grey line): **k = {elbow_k}** · "
-        f"kneedle: **k = {elbow_k_kneedle}** · "
+        f"Heuristic references — elbow (**⟂ chord**, grey): **k = {elbow_k}** · "
+        f"alt. elbow (**Δ² inertia**, green when shown): **k = {elbow_k_kneedle}** · "
         f"best silhouette (sklearn): **k = {best_sil_k}**. "
         f"Visualizations use **k = {viz_k}** (sidebar)."
     )
@@ -442,7 +423,7 @@ if "ks_k_range" in st.session_state:
         x=elbow_k,
         line_dash="dash",
         line_color="gray",
-        annotation_text=f"primary k={elbow_k}",
+        annotation_text=f"elbow ⟂ k={elbow_k}",
         annotation_position="top right",
     )
     if elbow_k_kneedle != elbow_k:
@@ -450,7 +431,7 @@ if "ks_k_range" in st.session_state:
             x=elbow_k_kneedle,
             line_dash="dot",
             line_color="darkgreen",
-            annotation_text=f"kneedle k={elbow_k_kneedle}",
+            annotation_text=f"Δ² elbow k={elbow_k_kneedle}",
             annotation_position="top left",
         )
 
@@ -475,10 +456,10 @@ if "ks_k_range" in st.session_state:
     st.plotly_chart(fig, use_container_width=True)
 
     st.info(
-        "**Grey dashed line** = inertia-based **k** suggestion (local minima / kneedle). "
-        "**Orange line** (when shown) = your sidebar **Clusters (k)** if it differs from grey. "
+        "**Grey dashed** = elbow via **max perpendicular distance** to the inertia chord (same as FastAPI `elbow_k`). "
+        "**Green dotted** (when shown) = alternate elbow from **|Δ² inertia|** on the normalized curve (`elbow_k_kneedle`). "
+        "**Orange** (when shown) = sidebar **Clusters (k)** if it differs from grey. "
         "**Yellow row** in the table matches **Clusters (k)**. "
-        "**Green dotted line** = kneedle when it differs from grey. "
         "**Silhouette** (red) is a separate cue."
     )
 
@@ -745,7 +726,7 @@ if "ks_k_range" in st.session_state:
     st.subheader("Results table")
     st.caption(
         "The **yellow row** matches **Clusters (k)** in the sidebar. "
-        "The grey vertical line is the inertia-only heuristic for comparison."
+        "The **grey** vertical line is the perpendicular-distance elbow (aligned with the deployed API)."
     )
 
     results_df = pd.DataFrame(

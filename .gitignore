@@ -15,16 +15,13 @@ __pycache__/
 
 # Raw data: CSVs etc. stay local (see data/raw/README.MD). CDTA shapefile is small (~1.5MB) and tracked.
 data/raw/**
-!data/raw/.gitkeep
 !data/raw/README.MD
 !data/raw/nyc_boundaries/
-!data/raw/nyc_boundaries/.gitkeep
 !data/raw/nyc_boundaries/nycdta2020.*
 
 # Generated outputs (embeddings, cluster HDF5 cache, validation plots, models) — regenerate locally.
 outputs/**
 !outputs/**/
-!outputs/**/.gitkeep
 claude.md
 
 # Stray cluster cache if dev ran Streamlit with cwd under tests/

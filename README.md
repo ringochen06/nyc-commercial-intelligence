@@ -283,7 +283,7 @@ The repo also ships as a two-tier web app: **FastAPI on Railway** (Python pipeli
    uv pip install -r requirements.txt
    uvicorn api.main:app --reload --port 8000
   ```
-2. **Push to GitHub**, then on [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway auto-detects Python via `requirements.txt`, `runtime.txt` (Python 3.11), and `railway.json` / `Procfile` (start command, healthcheck path).
+2. **Push to GitHub**, then on [railway.app](https://railway.app) → **New Project → Deploy from GitHub repo**. Railway’s builder (Railpack) picks the Python version from **`.python-version`** (pinned to **3.11.9**), then installs from **`requirements.txt`**. Deploy/runtime uses **`railway.json`** / **`Procfile`** for the start command and healthcheck path.
 3. **Set environment variables** on the Railway service (Settings → Variables):
   - `FRONTEND_ORIGINS` — comma-separated list of Vercel URLs that may call the API (e.g. `https://nyc-commercial.vercel.app`). Without this, only `http://localhost:3000` is allowed.
   - `OPENAI_API_KEY` — required at runtime to embed the user's query.

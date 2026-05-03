@@ -202,6 +202,7 @@ def kmeans_plus_plus(
         centroids.append(next_centroid)
     centroids = np.array(centroids)  # (k, d)
 
+    i = 0
     for i in range(max_iter):
         z = assign_labels(X, centroids)
         new_centroids = update_centroids(X, z, k, rng)

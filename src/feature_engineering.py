@@ -298,40 +298,23 @@ def build_storefront_features(storefront_joined: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================================================
-# Final merge
+# Final merge — private helpers
 # =========================================================
 
 
-def merge_all_features(
-    area_df: pd.DataFrame,
-    ped_feat: pd.DataFrame,
-    subway_feat: pd.DataFrame,
-    shooting_feat: pd.DataFrame,
-    nbhd_clean: pd.DataFrame,
-    storefront_feat: pd.DataFrame,
-) -> pd.DataFrame:
-    # Use CDTA-based spatial features as the master table (storefront replaces license/inspection POI).
-    df = area_df.copy()
-    for other in (ped_feat, subway_feat, shooting_feat, storefront_feat):
-        df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
+def _join_neighborhood_profile(
+    df: pd.DataFrame, nbhd_clean: pd.DataFrame
+) -> tuple[pd.DataFrame, list[str]]:
+    """Merge the MOCEJ/NFH neighborhood profile into df using a normalised CD join key.
 
-    # Neighborhood profile (MOCEJ / Planning-style CSV + optional NFH), keyed by CD ~ CDTA2020.
-    # Unmatched CDTAs get NaN on merge; we impute numeric profile columns below (borough then city median).
+    Returns the merged DataFrame and the list of profile columns that were joined,
+    so the caller can pass them to ``_impute_profile_columns``.
+    """
     df["_cd_join"] = df["cd"].map(normalize_cdta_join_key)
     nb = nbhd_clean.copy()
     nb["_cd_join"] = nb["cd"].map(normalize_cdta_join_key)
-    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(
-        subset=["_cd_join"], keep="first"
-    )
-    _profile_skip = (
-        "neighborhood",
-        "borough",
-        "cd",
-        "_cd_join",
-        "pct_hispanic",
-        "pct_black",
-        "pct_asian",
-    )
+    nb = nb.dropna(subset=["_cd_join"]).drop_duplicates(subset=["_cd_join"], keep="first")
+    _profile_skip = ("neighborhood", "borough", "cd", "_cd_join", "pct_hispanic", "pct_black", "pct_asian")
     profile_cols = [c for c in nb.columns if c not in _profile_skip]
     if profile_cols:
         n_with_key = df["_cd_join"].notna().sum()
@@ -345,9 +328,11 @@ def merge_all_features(
                 stacklevel=2,
             )
     df = df.drop(columns=["_cd_join"])
+    return df, profile_cols
 
-    # All merged profile columns (MOCEJ counts/income/commute/education, derived pct/totals, nfh_*):
-    # borough median then citywide median for remaining NaN (proxy where join missed a CD row).
+
+def _impute_profile_columns(df: pd.DataFrame, profile_cols: list[str]) -> pd.DataFrame:
+    """Fill NaN profile values: borough median first, then citywide median."""
     for col in profile_cols:
         if col not in df.columns:
             continue
@@ -358,8 +343,30 @@ def merge_all_features(
         gmed = df[col].median()
         if pd.notna(gmed):
             df[col] = df[col].fillna(gmed)
+    return df
 
-    # Storefront counts (CDTAs with no filings stay NaN until here)
+
+def _impute_pedestrian(df: pd.DataFrame) -> pd.DataFrame:
+    """Impute pedestrian columns with borough median then citywide median, then 0."""
+    for col in ["avg_pedestrian", "peak_pedestrian"]:
+        if col not in df.columns:
+            continue
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if df["borough"].notna().any():
+            borough_med = df.groupby("borough")[col].transform("median")
+            df[col] = df[col].fillna(borough_med)
+        gmed = df[col].median()
+        if pd.notna(gmed):
+            df[col] = df[col].fillna(gmed)
+        df[col] = df[col].fillna(0)
+    if "pedestrian_count_points" in df.columns:
+        df["pedestrian_count_points"] = df["pedestrian_count_points"].fillna(0)
+    return df
+
+
+def _compute_derived_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute category, density, and activity-score features; drop redundant columns."""
+    # Fill storefront NaNs before computing derived columns
     if "storefront_filing_count" in df.columns:
         df["storefront_filing_count"] = df["storefront_filing_count"].fillna(0)
     for col in df.columns:
@@ -375,33 +382,18 @@ def merge_all_features(
         df["category_diversity"] = 0
         df["category_entropy"] = 0.0
 
-    # business activity density: share of total filings per category (zero-safe)
     if "storefront_filing_count" in df.columns and act_cols:
         for col in act_cols:
             density_col = col[: -len("_storefront")] + "_density"
-            df[density_col] = safe_divide(
-                df[col], df["storefront_filing_count"]
-            ).fillna(0)
+            df[density_col] = safe_divide(df[col], df["storefront_filing_count"]).fillna(0)
 
-    # density features
     if "area_km2" in df.columns:
         if "subway_station_count" in df.columns:
-            df["subway_density_per_km2"] = safe_divide(
-                df["subway_station_count"], df["area_km2"]
-            )
+            df["subway_density_per_km2"] = safe_divide(df["subway_station_count"], df["area_km2"])
         if "storefront_filing_count" in df.columns:
-            df["storefront_density_per_km2"] = safe_divide(
-                df["storefront_filing_count"], df["area_km2"]
-            )
+            df["storefront_density_per_km2"] = safe_divide(df["storefront_filing_count"], df["area_km2"])
 
-    for col in [
-        "subway_density_per_km2",
-        "storefront_density_per_km2",
-    ]:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
-
-    for col in ["subway_station_count"]:
+    for col in ["subway_density_per_km2", "storefront_density_per_km2", "subway_station_count"]:
         if col in df.columns:
             df[col] = df[col].fillna(0)
     if "shooting_incident_count" in df.columns:
@@ -409,28 +401,12 @@ def merge_all_features(
             df["shooting_incident_count"], errors="coerce"
         ).fillna(0)
 
-    # Pedestrian: avoid a single citywide mean for all missing CDTAs (that collapses values).
-    for col in ["avg_pedestrian", "peak_pedestrian"]:
-        if col not in df.columns:
-            continue
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        if df["borough"].notna().any():
-            borough_med = df.groupby("borough")[col].transform("median")
-            df[col] = df[col].fillna(borough_med)
-        gmed = df[col].median()
-        if pd.notna(gmed):
-            df[col] = df[col].fillna(gmed)
-        df[col] = df[col].fillna(0)
-
-    if "pedestrian_count_points" in df.columns:
-        df["pedestrian_count_points"] = df["pedestrian_count_points"].fillna(0)
+    df = _impute_pedestrian(df)
 
     if {"avg_pedestrian", "storefront_filing_count"}.issubset(df.columns):
         raw_comm = df["avg_pedestrian"] * df["storefront_filing_count"]
         df["commercial_activity_score"] = np.log1p(np.maximum(raw_comm, 0))
-        print(
-            f"Computed commercial_activity_score: {df['commercial_activity_score'].describe()}"
-        )
+        print(f"Computed commercial_activity_score: {df['commercial_activity_score'].describe()}")
         raw_competitive = df["storefront_filing_count"] / (df["avg_pedestrian"] + 1.0)
         df["competitive_score"] = np.log1p(np.maximum(raw_competitive, 0))
         print(f"Computed competitive_score: {df['competitive_score'].describe()}")
@@ -439,30 +415,50 @@ def merge_all_features(
         raw_trans = df["subway_station_count"] * df["avg_pedestrian"]
         df["transit_activity_score"] = np.log1p(np.maximum(raw_trans, 0))
 
-    # Keep MOCEJ income as fallback when NFH income is unavailable.
+    # Keep MOCEJ income as fallback when NFH income is unavailable
     if "nfh_median_income" in df.columns and "median_household_income" in df.columns:
         df = df.drop(columns=["median_household_income"], errors="ignore")
-    _nfh_ranks = [
-        c for c in df.columns if str(c).startswith("nfh_") and str(c).endswith("_rank")
-    ]
+    _nfh_ranks = [c for c in df.columns if str(c).startswith("nfh_") and str(c).endswith("_rank")]
     if _nfh_ranks:
         df = df.drop(columns=_nfh_ranks, errors="ignore")
 
-    # Keep pop counts + total population proxy adjacent for readability
-    cols = list(df.columns)
-    pop_block = [
-        c
-        for c in ("pop_black", "pop_hispanic", "pop_asian", "total_population_proxy")
-        if c in cols
-    ]
-    if pop_block:
-        block_set = set(pop_block)
-        pos = min(cols.index(c) for c in pop_block)
-        before = [c for i, c in enumerate(cols) if i < pos and c not in block_set]
-        after = [c for i, c in enumerate(cols) if i >= pos and c not in block_set]
-        df = df[before + pop_block + after]
-
     return df
+
+
+def _reorder_pop_block(df: pd.DataFrame) -> pd.DataFrame:
+    """Move pop_black, pop_hispanic, pop_asian, total_population_proxy to a contiguous block."""
+    cols = list(df.columns)
+    pop_block = [c for c in ("pop_black", "pop_hispanic", "pop_asian", "total_population_proxy") if c in cols]
+    if not pop_block:
+        return df
+    block_set = set(pop_block)
+    pos = min(cols.index(c) for c in pop_block)
+    before = [c for i, c in enumerate(cols) if i < pos and c not in block_set]
+    after = [c for i, c in enumerate(cols) if i >= pos and c not in block_set]
+    return df[before + pop_block + after]
+
+
+# =========================================================
+# Final merge
+# =========================================================
+
+
+def merge_all_features(
+    area_df: pd.DataFrame,
+    ped_feat: pd.DataFrame,
+    subway_feat: pd.DataFrame,
+    shooting_feat: pd.DataFrame,
+    nbhd_clean: pd.DataFrame,
+    storefront_feat: pd.DataFrame,
+) -> pd.DataFrame:
+    df = area_df.copy()
+    for other in (ped_feat, subway_feat, shooting_feat, storefront_feat):
+        df = df.merge(other, on=["neighborhood", "cd", "borough"], how="left")
+
+    df, profile_cols = _join_neighborhood_profile(df, nbhd_clean)
+    df = _impute_profile_columns(df, profile_cols)
+    df = _compute_derived_features(df)
+    return _reorder_pop_block(df)
 
 
 # =========================================================

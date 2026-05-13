@@ -123,6 +123,26 @@ def _features_hash(features: list[str]) -> str:
     combined = "|".join(sorted_features)
     return hashlib.md5(combined.encode()).hexdigest()[:8]
 
+
+def _data_hash(X: np.ndarray) -> str:
+    """8-char MD5 digest of the data matrix bytes (C-contiguous layout)."""
+    return hashlib.md5(np.ascontiguousarray(X).tobytes()).hexdigest()[:8]
+
+
+def _full_cache_key(features: list[str], X: np.ndarray, random_state: int | None) -> str:
+    """Stable cache key covering feature names, data matrix contents, row count, and random state.
+
+    Hashing the actual data matrix bytes means that borough-filtered subsets,
+    differently ordered rows, or any other change to the input data produce a
+    different key, preventing stale labels from being reused across distinct
+    datasets.
+    """
+    combined = "|".join(sorted(features))
+    combined += f"|n={X.shape[0]}"
+    combined += f"|data={_data_hash(X)}"
+    combined += f"|rs={random_state}"
+    return hashlib.md5(combined.encode()).hexdigest()[:8]
+
 def pairwise_squared_euclidean(X: np.ndarray, C: np.ndarray) -> np.ndarray:
     """Compute pairwise squared Euclidean distances between two sets of points.
 
@@ -212,7 +232,17 @@ def kmeans_plus_plus(
         centroids = new_centroids
 
     return z, centroids, i + 1
-    
+
+
+def minibatch_kmeans(
+    X: np.ndarray,
+    k: int,
+    **kwargs,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Placeholder — mini-batch K-means is not yet implemented."""
+    raise NotImplementedError("minibatch_kmeans is not yet implemented.")
+
+
 def kmeans_plus_plus_with_caching(
     features: list[str],
     X: np.ndarray,
@@ -225,19 +255,20 @@ def kmeans_plus_plus_with_caching(
     """Run K-means with K-means++ initialisation, caching results to avoid recomputation.
 
     Caches results in an HDF5 file per ``k`` (``outputs/clusters/kmeans_k{k}.h5``),
-    with datasets keyed by a hash of the feature names.  On a cache hit the
-    stored labels, centroids, and iteration count are returned immediately
-    without touching ``X``.  On a cache miss, ``kmeans_plus_plus`` is called
-    and the results are persisted before returning.  Multiple feature
-    selections for the same ``k`` coexist within a single HDF5 file.
+    with datasets keyed by a compound hash of feature names, the data matrix
+    bytes, row count, and ``random_state``.  On a cache hit the stored labels,
+    centroids, and iteration count are returned immediately.  On a cache miss,
+    ``kmeans_plus_plus`` is called and the results are persisted before returning.
+    Multiple distinct inputs for the same ``k`` coexist within a single HDF5 file.
 
     Parameters
     ----------
     features : list[str]
-        Feature column names used to generate the cache key.  Must match
-        the columns whose values appear (in the same column order) in ``X``.
+        Feature column names — part of the cache key.  Must match the columns
+        whose values appear (in the same column order) in ``X``.
     X : np.ndarray, shape (n, d)
-        Feature matrix used for clustering.  Ignored on a cache hit.
+        Feature matrix used for clustering.  Its contents are hashed into the
+        cache key, so a different filtered dataset always produces a cache miss.
     k : int
         Number of clusters to form.
     max_iter : int, optional
@@ -260,17 +291,20 @@ def kmeans_plus_plus_with_caching(
     """
     CLUSTER_PATH.mkdir(parents=True, exist_ok=True)
     cache_file = CLUSTER_PATH / f"kmeans_k{k}.h5"
-    
-    # Try to load from cache
+
+    # Build a key that covers features, the actual data matrix, and random_state
+    # so that a different filtered dataset (different borough, row count, or values)
+    # never hits a cache entry computed on a different dataset.
+    full_key = _full_cache_key(features, X, random_state)
+
     try:
-        labels, centroids, iterations = load_kmeans_results(k, features, cache_file)
+        labels, centroids, iterations = load_kmeans_results(k, features, cache_file, cache_key=full_key)
         return labels, centroids, 0  # 0 iterations indicates loaded from cache
     except (FileNotFoundError, KeyError):
         pass  # Cache miss, proceed with computation
-    
-    # Compute new results
+
     labels, centroids, n_iter = kmeans_plus_plus(X, k, max_iter=max_iter, tol=tol, random_state=random_state)
-    save_kmeans_results(k, features, labels, centroids, n_iter, cache_file)
+    save_kmeans_results(k, features, labels, centroids, n_iter, cache_file, cache_key=full_key)
     return labels, centroids, n_iter
 
 
@@ -432,7 +466,7 @@ def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
 
 
 
-def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, n_iterations: int, path: Path | str) -> None:
+def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroids: np.ndarray, n_iterations: int, path: Path | str, *, cache_key: str | None = None) -> None:
     """Persist clustering results to an HDF5 file keyed by feature selection.
 
     Writes four datasets to the file, each suffixed with an 8-character hash
@@ -470,8 +504,8 @@ def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroi
     None
     """
     path = Path(path) if isinstance(path, str) else path
-    feat_key = _features_hash(features)
-    
+    feat_key = cache_key if cache_key is not None else _features_hash(features)
+
     data = {
         f"features_{feat_key}": np.array(features, dtype=object),
         f"labels_{feat_key}": labels,
@@ -480,7 +514,7 @@ def save_kmeans_results(k: int, features: list[str], labels: np.ndarray, centroi
     }
     _save_hdf5_dict(data, path)
 
-def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[np.ndarray, np.ndarray, int]:
+def load_kmeans_results(k: int, features: list[str], path: Path | str, *, cache_key: str | None = None) -> tuple[np.ndarray, np.ndarray, int]:
     """Load persisted clustering results from an HDF5 file by ``k`` and feature set.
 
     Derives the dataset key from ``_features_hash(features)`` and looks up
@@ -517,8 +551,8 @@ def load_kmeans_results(k: int, features: list[str], path: Path | str) -> tuple[
         (i.e. this feature combination has not been cached yet).
     """
     path = Path(path) if isinstance(path, str) else path
-    feat_key = _features_hash(features)
-    
+    feat_key = cache_key if cache_key is not None else _features_hash(features)
+
     if not path.exists():
         raise FileNotFoundError(f"Cluster cache file not found: {path}")
     

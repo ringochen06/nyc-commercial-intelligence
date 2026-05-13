@@ -107,6 +107,85 @@ def _embed_texts_sentence_transformers(
 # ── Text profile builder ────────────────────────────────────────────────────
 
 
+def _nfh_section(nfh_overall, nfh_shocks) -> str:
+    parts: list[str] = []
+    if pd.notna(nfh_overall):
+        parts.append(f" Neighborhood financial health overall index score is {float(nfh_overall):.2f}.")
+    if pd.notna(nfh_shocks):
+        parts.append(f" Financial-shock resilience score is {float(nfh_shocks):.2f}.")
+    return "".join(parts)
+
+
+def _soc_commute_section(mhi, pct_bach, commute_pt) -> str:
+    soc_parts: list[str] = []
+    if pd.notna(mhi):
+        try:
+            soc_parts.append(f"NFH median income about ${int(float(mhi)):,}")
+        except (TypeError, ValueError):
+            pass
+    if pd.notna(pct_bach):
+        try:
+            soc_parts.append(
+                f"about {float(pct_bach):.0f}% adults with bachelor's or higher (community profile)"
+            )
+        except (TypeError, ValueError):
+            pass
+    soc_txt = (
+        " Community socioeconomic proxies: " + "; ".join(soc_parts) + "."
+        if soc_parts
+        else ""
+    )
+    comm_txt = ""
+    if pd.notna(commute_pt):
+        try:
+            comm_txt = f" About {float(commute_pt):.0f}% of workers commute by public transit (community profile)."
+        except (TypeError, ValueError):
+            pass
+    return soc_txt + comm_txt
+
+
+def _pop_demographics_section(pop_b, pop_h, pop_a, pop_tot) -> str:
+    if not (pd.notna(pop_tot) and float(pop_tot or 0) > 0):
+        return ""
+    try:
+        b = int(float(pop_b or 0))
+        h = int(float(pop_h or 0))
+        a = int(float(pop_a or 0))
+        t = int(float(pop_tot))
+        return (
+            " Community demographics (MOCEJ-style resident counts by group, not percentages):"
+            f" Black population about {b:,}; Hispanic population about {h:,}; Asian population about {a:,};"
+            f" total population proxy (sum of those three groups) about {t:,}."
+        )
+    except (TypeError, ValueError):
+        return ""
+
+
+def _storefront_activity_section(row: pd.Series, sf_count: int) -> str:
+    if not (pd.notna(sf_count) and float(sf_count or 0) > 0):
+        return ""
+    try:
+        act_cols = [
+            c
+            for c in row.index
+            if str(c).startswith("act_")
+            and str(c).endswith("_storefront")
+            and float(row.get(c, 0) or 0) > 0
+        ]
+        pairs: list[tuple[str, float]] = [
+            (str(c).removeprefix("act_").removesuffix("_storefront").replace("_", " "), float(row[c]))
+            for c in act_cols
+        ]
+        pairs.sort(key=lambda x: -x[1])
+        top_txt = ", ".join(f"{n} ({int(v)})" for n, v in pairs) if pairs else ""
+        return (
+            f" Non-vacant storefront filings by primary business activity: {int(float(sf_count))} total."
+            + (f" Counts by activity: {top_txt}." if top_txt else "")
+        )
+    except (TypeError, ValueError):
+        return ""
+
+
 def build_text_profile(row: pd.Series) -> str:
     """
     Compose a short natural-language profile for one neighborhood row.
@@ -152,96 +231,24 @@ def build_text_profile(row: pd.Series) -> str:
     pop_tot = row.get("total_population_proxy")
 
     foot_traffic = (
-        "very high"
-        if ped > 5000
-        else "high" if ped > 3000 else "moderate" if ped > 1500 else "low"
+        "very high" if ped > 5000
+        else "high" if ped > 3000
+        else "moderate" if ped > 1500
+        else "low"
     )
     biz_density = (
-        "extremely dense"
-        if density > 30
-        else "dense" if density > 10 else "moderate" if density > 3 else "sparse"
+        "extremely dense" if density > 30
+        else "dense" if density > 10
+        else "moderate" if density > 3
+        else "sparse"
     )
     diversity = (
-        "highly diverse"
-        if entropy > 0.8
-        else "diverse" if entropy > 0.6 else "moderate" if entropy > 0.4 else "limited"
+        "highly diverse" if entropy > 0.8
+        else "diverse" if entropy > 0.6
+        else "moderate" if entropy > 0.4
+        else "limited"
     )
-    nfh_txt = ""
-    if pd.notna(nfh_overall):
-        nfh_txt += f" Neighborhood financial health overall index score is {float(nfh_overall):.2f}."
-    if pd.notna(nfh_shocks):
-        nfh_txt += f" Financial-shock resilience score is {float(nfh_shocks):.2f}."
-
     mix_txt = f"{cat_div} distinct primary-business-activity buckets from storefront filings. "
-
-    soc_parts: list[str] = []
-    if pd.notna(mhi):
-        try:
-            soc_parts.append(f"NFH median income about ${int(float(mhi)):,}")
-        except (TypeError, ValueError):
-            pass
-    if pd.notna(pct_bach):
-        try:
-            soc_parts.append(
-                f"about {float(pct_bach):.0f}% adults with bachelor's or higher (community profile)"
-            )
-        except (TypeError, ValueError):
-            pass
-    soc_txt = (
-        (" Community socioeconomic proxies: " + "; ".join(soc_parts) + ".")
-        if soc_parts
-        else ""
-    )
-
-    # Separate sentences so queries like "Asian restaurant" align Asian population with FOOD SERVICES counts.
-    pop_demog_txt = ""
-    if pd.notna(pop_tot) and float(pop_tot or 0) > 0:
-        try:
-            b = int(float(pop_b or 0))
-            h = int(float(pop_h or 0))
-            a = int(float(pop_a or 0))
-            t = int(float(pop_tot))
-            pop_demog_txt = (
-                " Community demographics (MOCEJ-style resident counts by group, not percentages):"
-                f" Black population about {b:,}; Hispanic population about {h:,}; Asian population about {a:,};"
-                f" total population proxy (sum of those three groups) about {t:,}."
-            )
-        except (TypeError, ValueError):
-            pop_demog_txt = ""
-
-    comm_txt = ""
-    if pd.notna(commute_pt):
-        try:
-            comm_txt = f" About {float(commute_pt):.0f}% of workers commute by public transit (community profile)."
-        except (TypeError, ValueError):
-            pass
-
-    sf_txt = ""
-    if pd.notna(sf_count) and float(sf_count or 0) > 0:
-        try:
-            act_cols = [
-                c
-                for c in row.index
-                if str(c).startswith("act_")
-                and str(c).endswith("_storefront")
-                and float(row.get(c, 0) or 0) > 0
-            ]
-            pairs: list[tuple[str, float]] = []
-            for c in act_cols:
-                slug = (
-                    str(c).removeprefix("act_").removesuffix("_storefront").replace("_", " ")
-                )
-                pairs.append((slug, float(row[c])))
-            pairs.sort(key=lambda x: -x[1])
-            # List every non-zero activity so free-text queries (e.g. a specific NAICS bucket)
-            # can match CDTAs where that category is present even if it is not in the top few.
-            top_txt = ", ".join(f"{n} ({int(v)})" for n, v in pairs) if pairs else ""
-            sf_txt = (
-                f" Non-vacant storefront filings by primary business activity: {int(float(sf_count))} total."
-                + (f" Counts by activity: {top_txt}." if top_txt else "")
-            )
-        except (TypeError, ValueError):
-            sf_txt = ""
 
     return (
         f"{name} in {borough}. "
@@ -255,10 +262,10 @@ def build_text_profile(row: pd.Series) -> str:
         f" 2024 shooting incident count {shooting_incidents}."
         f" Employment composition (counts): construction {construction_jobs}, manufacturing {manufacturing_jobs}, wholesale {wholesale_jobs}, total jobs {total_jobs}."
         f" Business stock proxies: food services {food_services}, total businesses {total_businesses}."
-        f"{soc_txt}{comm_txt}"
-        f"{pop_demog_txt}"
-        f"{sf_txt}"
-        f"{nfh_txt}"
+        f"{_soc_commute_section(mhi, pct_bach, commute_pt)}"
+        f"{_pop_demographics_section(pop_b, pop_h, pop_a, pop_tot)}"
+        f"{_storefront_activity_section(row, sf_count)}"
+        f"{_nfh_section(nfh_overall, nfh_shocks)}"
     )
 
 

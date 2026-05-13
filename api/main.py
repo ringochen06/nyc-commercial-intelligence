@@ -195,6 +195,25 @@ def geo_cdta() -> dict:
     }
 
 
+def _kmeans_sweep(
+    X: np.ndarray,
+    k_range: list[int],
+    random_state: int | None,
+) -> tuple[list[float], list[float], list[float], dict[int, tuple[np.ndarray, np.ndarray]]]:
+    """Run K-means for every k in k_range and return inertias, silhouette scores, and label cache."""
+    inertias: list[float] = []
+    sil_numpy: list[float] = []
+    sil_sklearn: list[float] = []
+    sweep_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for k in k_range:
+        labels, centroids, _ = kmeans_plus_plus(X, k, random_state=random_state)
+        sweep_cache[k] = (labels, centroids)
+        inertias.append(compute_inertia(X, labels, centroids))
+        sil_numpy.append(silhouette_score(X, labels))
+        sil_sklearn.append(float(sklearn_silhouette_score(X, labels)))
+    return inertias, sil_numpy, sil_sklearn, sweep_cache
+
+
 @app.post("/api/cluster", response_model=ClusterResponse)
 def cluster(req: ClusterRequest) -> ClusterResponse:
     df_master = load_features(req.vintage)
@@ -230,17 +249,7 @@ def cluster(req: ClusterRequest) -> ClusterResponse:
     effective_max_k = min(req.max_k, n - 1)
     k_range = list(range(2, effective_max_k + 1))
 
-    inertias: list[float] = []
-    sil_numpy: list[float] = []
-    sil_sklearn: list[float] = []
-    # Cache labels/centroids from the sweep so viz_k doesn't need a second run.
-    _sweep_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-    for k in k_range:
-        labels, centroids, _ = kmeans_plus_plus(X, k, random_state=req.random_state)
-        _sweep_cache[k] = (labels, centroids)
-        inertias.append(compute_inertia(X, labels, centroids))
-        sil_numpy.append(silhouette_score(X, labels))
-        sil_sklearn.append(float(sklearn_silhouette_score(X, labels)))
+    inertias, sil_numpy, sil_sklearn, _sweep_cache = _kmeans_sweep(X, k_range, req.random_state)
 
     elbow_k = _find_elbow(k_range, inertias)
     elbow_k_kneedle = _find_elbow_curvature_knee(k_range, inertias)
@@ -333,6 +342,34 @@ def filter_endpoint(req: FilterRequest) -> FilterResponse:
     )
 
 
+def _competitive_scores(
+    df_filtered: pd.DataFrame,
+    keep_names: list[str],
+    source: str,
+) -> np.ndarray:
+    """Return a per-neighborhood competitive-pressure array for the given source column."""
+    if source == "__overall__":
+        if "competitive_score" not in df_filtered.columns:
+            raise HTTPException(500, "competitive_score column missing from filtered data.")
+        return np.array(
+            [float(df_filtered.loc[df_filtered["neighborhood"] == n, "competitive_score"].iloc[0]) for n in keep_names],
+            dtype=float,
+        )
+    if not (source.startswith("act_") and source.endswith("_storefront")):
+        raise HTTPException(400, f"Invalid competitive_source '{source}'. Use '__overall__' or an act_*_storefront column.")
+    if source not in df_filtered.columns:
+        raise HTTPException(400, f"Column '{source}' missing from feature table.")
+    counts = np.array(
+        [float(df_filtered.loc[df_filtered["neighborhood"] == n, source].iloc[0]) for n in keep_names],
+        dtype=float,
+    )
+    ped_scores = np.array(
+        [float(df_filtered.loc[df_filtered["neighborhood"] == n, "avg_pedestrian"].iloc[0]) for n in keep_names],
+        dtype=float,
+    )
+    return np.log1p(np.maximum(counts / (ped_scores + 1.0), 0.0))
+
+
 @app.post("/api/rank", response_model=RankResponse)
 def rank(req: RankRequest) -> RankResponse:
     # Prefer Supabase when configured.
@@ -374,39 +411,7 @@ def rank(req: RankRequest) -> RankResponse:
     sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
     source = req.competitive_source or "__overall__"
-    if source == "__overall__":
-        if "competitive_score" not in df_filtered.columns:
-            raise HTTPException(500, "competitive_score column missing from filtered data.")
-        competitive = np.array(
-            [
-                float(df_filtered.loc[df_filtered["neighborhood"] == n, "competitive_score"].iloc[0])
-                for n in keep_names
-            ],
-            dtype=float,
-        )
-    else:
-        if not (source.startswith("act_") and source.endswith("_storefront")):
-            raise HTTPException(
-                400,
-                f"Invalid competitive_source '{source}'. Use '__overall__' or an act_*_storefront column.",
-            )
-        if source not in df_filtered.columns:
-            raise HTTPException(400, f"Column '{source}' missing from feature table.")
-        counts = np.array(
-            [
-                float(df_filtered.loc[df_filtered["neighborhood"] == n, source].iloc[0])
-                for n in keep_names
-            ],
-            dtype=float,
-        )
-        ped_scores = np.array(
-            [
-                float(df_filtered.loc[df_filtered["neighborhood"] == n, "avg_pedestrian"].iloc[0])
-                for n in keep_names
-            ],
-            dtype=float,
-        )
-        competitive = np.log1p(np.maximum(counts / (ped_scores + 1.0), 0.0))
+    competitive = _competitive_scores(df_filtered, keep_names, source)
 
     # Higher competition should lower rank, so use the negated competition signal.
     X = np.column_stack([sim_scores.astype(float), -competitive])

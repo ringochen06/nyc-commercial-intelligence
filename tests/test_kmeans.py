@@ -6,9 +6,8 @@ import pytest
 from src.kmeans_numpy import (
     assign_labels,
     compute_inertia,
-    kmeans,
-    kmeans_plus_plus_with_caching,
     kmeans_plus_plus,
+    kmeans_plus_plus_with_caching,
     minibatch_kmeans,
     silhouette_score,
 )
@@ -81,4 +80,22 @@ def test_minibatch_kmeans_not_implemented():
     X = np.zeros((5, 2))
     with pytest.raises(NotImplementedError):
         minibatch_kmeans(X, k=2)
+
+
+def test_cache_key_differs_for_different_data():
+    """Cached labels for one dataset must not be returned for a different dataset."""
+    print("\n[TEST] test_cache_key_differs_for_different_data: Testing that different data matrices produce separate cache entries")
+    rng = np.random.default_rng(7)
+    X1 = rng.standard_normal((15, 2))
+    X2 = rng.standard_normal((20, 2))  # Different shape guarantees different data
+    features = ["feat_0", "feat_1"]
+
+    labels1, _, _ = kmeans_plus_plus_with_caching(features, X1, k=2, random_state=0)
+    labels2, _, _ = kmeans_plus_plus_with_caching(features, X2, k=2, random_state=0)
+
+    # The label arrays must match the size of their respective input matrices.
+    # With the old (broken) cache key, labels2 would be loaded from X1's cache
+    # and have 15 elements instead of 20, causing these assertions to fail.
+    assert labels1.shape[0] == 15, f"Expected 15, got {labels1.shape[0]}"
+    assert labels2.shape[0] == 20, f"Expected 20, got {labels2.shape[0]}"
 

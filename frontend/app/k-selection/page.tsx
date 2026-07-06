@@ -66,6 +66,10 @@ const ACTIVITY_LABEL_REPLACEMENTS: Record<string, string> = {
   other: "other services",
 };
 
+/** Per-category storefront density fields, e.g. act_retail_density. */
+const isActivityDensity = (feature: string): boolean =>
+  feature.startsWith("act_") && feature.endsWith("_density");
+
 const formatFeatureLabel = (feature: string): string => {
   if (feature.startsWith("act_") && feature.endsWith("_density")) {
     const base = feature
@@ -114,6 +118,21 @@ export default function KSelectionPage() {
   const [geo, setGeo] = useState<CdtaGeoResponse | null>(null);
   const [scatterX, setScatterX] = useState<string>("avg_pedestrian");
   const [scatterY, setScatterY] = useState<string>("storefront_filing_count");
+
+  // Split clustering features so the many per-category density fields live under
+  // their own collapsible section instead of crowding the main feature picker.
+  const baseFeatureOptions = useMemo(
+    () => candidateFeatures.filter((f) => !isActivityDensity(f)),
+    [candidateFeatures]
+  );
+  const activityDensityOptions = useMemo(
+    () => candidateFeatures.filter(isActivityDensity),
+    [candidateFeatures]
+  );
+  const activityDensitySelectedCount = useMemo(
+    () => features.filter(isActivityDensity).length,
+    [features]
+  );
 
   const setClustering = useClusterStore((s) => s.setClustering);
 
@@ -422,11 +441,45 @@ export default function KSelectionPage() {
           <div className="space-y-4">
             <MultiSelect
               label="Features for clustering"
-              options={candidateFeatures}
+              options={baseFeatureOptions}
               value={features}
               onChange={setFeatures}
               format={formatFeatureLabel}
             />
+
+            {activityDensityOptions.length > 0 && (
+              <details className="group rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[13px] font-medium text-ink [&::-webkit-details-marker]:hidden">
+                  <span>
+                    Business category densities
+                    {activityDensitySelectedCount > 0 && (
+                      <span className="font-normal text-muted">
+                        {" "}
+                        · {activityDensitySelectedCount} selected
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    aria-hidden
+                    className="text-[15px] leading-none text-muted transition-transform group-open:rotate-180"
+                  >
+                    ▾
+                  </span>
+                </summary>
+                <p className="mb-3 mt-2 text-[12px] leading-5 text-muted">
+                  Per-category storefront density — retail, food service, finance,
+                  manufacturing, and other activity types. Add any of these to the
+                  clustering feature set.
+                </p>
+                <MultiSelect
+                  label=""
+                  options={activityDensityOptions}
+                  value={features}
+                  onChange={setFeatures}
+                  format={formatFeatureLabel}
+                />
+              </details>
+            )}
             <Slider
               label="Maximum k"
               value={maxK}

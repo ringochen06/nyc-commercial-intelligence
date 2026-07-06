@@ -105,7 +105,11 @@ def _rank_via_supabase(req: RankRequest, client) -> RankResponse:
             "competitive_source != '__overall__' requires the CSV path (per-category act_* data)."
         )
 
-    query_embedding = embed_texts([req.query])[0].tolist()
+    # Voyage embeds queries and documents asymmetrically: the stored corpus was
+    # built with input_type="document" (see scripts/load_supabase.py), so the
+    # search text must use input_type="query" or the <=> cosine comparison degrades.
+    # OpenAI / sentence-transformers ignore input_type, so this is a no-op there.
+    query_embedding = embed_texts([req.query], input_type="query")[0].tolist()
 
     # match_count default in the SQL is 50; bump to 200 to comfortably cover all CDTAs.
     rpc_args = {

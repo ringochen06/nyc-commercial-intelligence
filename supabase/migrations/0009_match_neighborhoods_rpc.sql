@@ -7,7 +7,7 @@ drop function if exists public.match_neighborhoods(
 );
 
 create or replace function public.match_neighborhoods(
-    query_embedding             vector(1536),
+    query_embedding             vector(1024),
     boroughs                    text[]            default null,
     min_subway_station_count    integer           default null,
     min_avg_pedestrian          double precision  default null,

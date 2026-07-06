@@ -3,11 +3,14 @@ Generate and store neighborhood text-profile embeddings.
 
 Backends (see EMBEDDING_BACKEND):
   - openai: text-embedding-3-small (or OPENAI_EMBEDDING_MODEL) via API
+  - voyage: voyage-4 (or VOYAGE_EMBEDDING_MODEL), 1024-dim, via API
   - sentence_transformers: local model (default all-MiniLM-L6-v2), no API
-  - auto: OpenAI if OPENAI_API_KEY is set, else sentence-transformers
+  - auto: Voyage if VOYAGE_API_KEY is set, else OpenAI if OPENAI_API_KEY is set,
+    else sentence-transformers
 
 Caches under outputs/embeddings/:
   - OpenAI vectors: neighborhood_embeddings.npy (+ neighborhood_texts.npy)
+  - Voyage vectors: neighborhood_embeddings_voyage.npy (same texts file)
   - Sentence-transformers: neighborhood_embeddings_st.npy (same texts file)
 Readable profile export under outputs/text_profiles/:
     - neighborhood_profiles_readable.txt
@@ -38,6 +41,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+VOYAGE_EMBEDDING_MODEL = os.getenv("VOYAGE_EMBEDDING_MODEL", "voyage-4").strip()
 SENTENCE_TRANSFORMER_MODEL = os.getenv(
     "SENTENCE_TRANSFORMER_MODEL", "all-MiniLM-L6-v2"
 ).strip()
@@ -45,11 +49,13 @@ SENTENCE_TRANSFORMER_MODEL = os.getenv(
 EMBEDDINGS_DIR = Path(__file__).resolve().parent.parent / "outputs" / "embeddings"
 TEXT_PROFILES_DIR = Path(__file__).resolve().parent.parent / "outputs" / "text_profiles"
 EMBEDDINGS_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings.npy"
+EMBEDDINGS_VOYAGE_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings_voyage.npy"
 EMBEDDINGS_ST_PATH = EMBEDDINGS_DIR / "neighborhood_embeddings_st.npy"
 TEXTS_PATH = EMBEDDINGS_DIR / "neighborhood_texts.npy"
 READABLE_PROFILES_PATH = TEXT_PROFILES_DIR / "neighborhood_profiles_readable.txt"
 
 _st_model = None
+_voyage_client = None
 
 
 def _backend_env_raw() -> str:
@@ -60,12 +66,19 @@ def resolve_embedding_backend() -> str:
     """
     Effective backend for cache paths and embed_texts / embed_neighborhood_features.
 
-    Values: "openai" | "sentence_transformers".
+    Values: "openai" | "voyage" | "sentence_transformers".
+
+    In "auto" mode Voyage is preferred (matches the pgvector 1024-dim schema and
+    needs no torch on Railway), then OpenAI, then local sentence-transformers.
     """
     raw = _backend_env_raw()
-    if raw in ("sentence_transformers", "st", "sbert"):
-        return "sentence_transformers"
+    if raw in ("voyage", "voyageai"):
+        return "voyage"
+    # if raw in ("sentence_transformers", "st", "sbert"):
+    #     return "sentence_transformers"
     if raw == "auto":
+        if os.getenv("VOYAGE_API_KEY", "").strip():
+            return "voyage"
         if os.getenv("OPENAI_API_KEY", "").strip():
             return "openai"
         return "sentence_transformers"
@@ -73,35 +86,63 @@ def resolve_embedding_backend() -> str:
 
 
 def _cache_paths(backend: str) -> tuple[Path, Path]:
-    if backend == "sentence_transformers":
-        return EMBEDDINGS_ST_PATH, TEXTS_PATH
+    if backend == "voyage":
+        return EMBEDDINGS_VOYAGE_PATH, TEXTS_PATH
+    # if backend == "sentence_transformers":
+    #     return EMBEDDINGS_ST_PATH, TEXTS_PATH
     return EMBEDDINGS_PATH, TEXTS_PATH
 
+### Until I have a proper embedding backend interface, use SentenceTransformers
+# def _get_sentence_transformer(model_name: str | None = None):
+#     global _st_model
+#     name = (model_name or SENTENCE_TRANSFORMER_MODEL).strip()
+#     if _st_model is not None and getattr(_st_model, "_ci_name", None) == name:
+#         return _st_model
+#     from sentence_transformers import SentenceTransformer
 
-def _get_sentence_transformer(model_name: str | None = None):
-    global _st_model
-    name = (model_name or SENTENCE_TRANSFORMER_MODEL).strip()
-    if _st_model is not None and getattr(_st_model, "_ci_name", None) == name:
-        return _st_model
-    from sentence_transformers import SentenceTransformer
+#     _st_model = SentenceTransformer(name)
+#     setattr(_st_model, "_ci_name", name)
+#     return _st_model
 
-    _st_model = SentenceTransformer(name)
-    setattr(_st_model, "_ci_name", name)
-    return _st_model
+# def _embed_texts_sentence_transformers(
+#     texts: list[str], *, model_name: str | None = None
+# ) -> np.ndarray:
+#     model = _get_sentence_transformer(model_name)
+#     vecs = model.encode(
+#         texts,
+#         batch_size=64,
+#         show_progress_bar=len(texts) > 128,
+#         convert_to_numpy=True,
+#         normalize_embeddings=True,
+#     )
+#     return np.asarray(vecs, dtype=np.float32)
 
 
-def _embed_texts_sentence_transformers(
-    texts: list[str], *, model_name: str | None = None
+# ── Voyage embedding ────────────────────────────────────────────────────────
+
+
+def _get_voyage_client():
+    global _voyage_client
+    if _voyage_client is None:
+        import voyageai  # lazy: only needed when the voyage backend is active
+
+        _voyage_client = voyageai.Client()  # reads VOYAGE_API_KEY from the env
+    return _voyage_client
+
+
+def _embed_texts_voyage(
+    texts: list[str], model: str, *, input_type: str = "document"
 ) -> np.ndarray:
-    model = _get_sentence_transformer(model_name)
-    vecs = model.encode(
-        texts,
-        batch_size=64,
-        show_progress_bar=len(texts) > 128,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
-    return np.asarray(vecs, dtype=np.float32)
+    """
+    Embed *texts* with Voyage AI (default voyage-4, 1024-dim).
+
+    Use input_type="document" for stored corpus vectors and input_type="query"
+    for search text; mismatching the two degrades the <=> cosine comparison
+    against the pgvector store.
+    """
+    client = _get_voyage_client()
+    result = client.embed(texts, model=model, input_type=input_type)
+    return np.asarray(result.embeddings, dtype=np.float32)
 
 
 # ── Text profile builder ────────────────────────────────────────────────────
@@ -186,7 +227,103 @@ def _storefront_activity_section(row: pd.Series, sf_count: int) -> str:
         return ""
 
 
-def build_text_profile(row: pd.Series) -> str:
+# Local copies of api/formatting helpers so src/ stays free of an api dependency
+# (src is a packaged module; api depends on src, not the reverse). Keep in sync.
+_ACTIVITY_LABELS = {
+    "broadcasting telecomm": "broadcasting and telecom",
+    "educational services": "education",
+    "food services": "food service",
+    "health care or social assistance": "health care and social assistance",
+    "movies video sound": "media and entertainment",
+    "no business activity identified": "no identified business activity",
+    "unknown": "unknown activity",
+    "other": "other services",
+}
+
+
+def _activity_label_from_col(col: str) -> str:
+    label = (
+        str(col)
+        .removeprefix("act_")
+        .removesuffix("_storefront")
+        .removesuffix("_density")
+        .replace("_", " ")
+        .lower()
+    )
+    return _ACTIVITY_LABELS.get(label, label)
+
+
+def _percentile_rank(values: np.ndarray, value: float) -> int | None:
+    vals = np.asarray(values, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0 or not np.isfinite(value):
+        return None
+    return int(round(100.0 * float(np.mean(vals <= value))))
+
+
+def _city_density_context(df: pd.DataFrame) -> dict:
+    """
+    Precompute citywide per-category density series and count totals once per df.
+
+    Threaded into build_text_profile so each row's category-density line can cite a
+    citywide percentile and citywide share without rescanning the whole table per row.
+    """
+    density_cols = [
+        c for c in df.columns
+        if str(c).startswith("act_") and str(c).endswith("_density")
+    ]
+    density_series: dict[str, np.ndarray] = {}
+    count_totals: dict[str, float] = {}
+    for dcol in density_cols:
+        density_series[dcol] = pd.to_numeric(df[dcol], errors="coerce").to_numpy(dtype=float)
+        ccol = str(dcol).removesuffix("_density") + "_storefront"
+        if ccol in df.columns:
+            count_totals[ccol] = float(pd.to_numeric(df[ccol], errors="coerce").fillna(0).sum())
+    return {"density_series": density_series, "count_totals": count_totals}
+
+
+def _category_density_section(row: pd.Series, city_ctx: dict | None) -> str:
+    """
+    One line per business-activity category, matching the cluster-description style:
+    the category's share of the neighborhood's storefront mix, its citywide
+    percentile, and the neighborhood's share of the city's storefronts in that
+    category.
+
+    Note: the underlying ``act_*_density`` column is a within-neighborhood share
+    (category count / total storefront filings), not an areal per-km2 density.
+    """
+    if not city_ctx:
+        return ""
+    density_series = city_ctx.get("density_series", {})
+    count_totals = city_ctx.get("count_totals", {})
+    bits: list[str] = []
+    for dcol, series in density_series.items():
+        raw = pd.to_numeric(row.get(dcol), errors="coerce")
+        if pd.isna(raw):
+            continue
+        share = float(raw)
+        pct = _percentile_rank(series, share)
+        if pct is None:
+            continue
+        label = _activity_label_from_col(dcol)
+        ccol = str(dcol).removesuffix("_density") + "_storefront"
+        total = float(count_totals.get(ccol, 0.0))
+        cnt = float(pd.to_numeric(row.get(ccol, 0), errors="coerce") or 0.0)
+        city_share = (100.0 * cnt / total) if total > 0 else 0.0
+        bits.append(
+            f"{label}—{share * 100:.1f}% of local storefront mix, {pct}th pct citywide, "
+            f"{city_share:.1f}% of the city's {label} storefronts"
+        )
+    if not bits:
+        return ""
+    return (
+        " Business-category storefront mix (each category's share of the neighborhood's "
+        "storefront filings, with citywide percentile and citywide share): "
+        + "; ".join(bits) + "."
+    )
+
+
+def build_text_profile(row: pd.Series, city_ctx: dict | None = None) -> str:
     """
     Compose a short natural-language profile for one neighborhood row.
 
@@ -265,16 +402,18 @@ def build_text_profile(row: pd.Series) -> str:
         f"{_soc_commute_section(mhi, pct_bach, commute_pt)}"
         f"{_pop_demographics_section(pop_b, pop_h, pop_a, pop_tot)}"
         f"{_storefront_activity_section(row, sf_count)}"
+        f"{_category_density_section(row, city_ctx)}"
         f"{_nfh_section(nfh_overall, nfh_shocks)}"
     )
 
 
 def build_all_profiles(df: pd.DataFrame) -> list[str]:
     """Return a text profile for every row in *df*."""
-    return [build_text_profile(row) for _, row in df.iterrows()]
+    city_ctx = _city_density_context(df)
+    return [build_text_profile(row, city_ctx) for _, row in df.iterrows()]
 
 
-def build_readable_profile(row: pd.Series) -> str:
+def build_readable_profile(row: pd.Series, city_ctx: dict | None = None) -> str:
     """Return a labeled, multiline view of one neighborhood row for inspection."""
     name = row.get("neighborhood", "Unknown")
     borough = row.get("borough", "")
@@ -331,7 +470,7 @@ def build_readable_profile(row: pd.Series) -> str:
             lines.append(f"  - {label}: {int(value)}")
 
     lines.append("Embedding text:")
-    lines.append(build_text_profile(row))
+    lines.append(build_text_profile(row, city_ctx))
     return "\n".join(lines)
 
 
@@ -339,7 +478,8 @@ def save_readable_profiles(df: pd.DataFrame, path: Path | str = READABLE_PROFILE
     """Write labeled neighborhood profiles to a text file and return the path."""
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    blocks = [build_readable_profile(row) for _, row in df.iterrows()]
+    city_ctx = _city_density_context(df)
+    blocks = [build_readable_profile(row, city_ctx) for _, row in df.iterrows()]
     output_path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
     return output_path
 
@@ -354,16 +494,23 @@ def _embed_texts_openai(texts: list[str], model: str) -> np.ndarray:
     return np.array(vecs, dtype=np.float32)
 
 
-def embed_texts(texts: list[str], model: str | None = None) -> np.ndarray:
+def embed_texts(
+    texts: list[str], model: str | None = None, *, input_type: str = "document"
+) -> np.ndarray:
     """
     Embed *texts* with the active backend (see resolve_embedding_backend).
 
     For OpenAI, *model* defaults to OPENAI_EMBEDDING_MODEL.
+    For Voyage, *model* defaults to VOYAGE_EMBEDDING_MODEL; pass input_type="query"
+    when embedding search text (default "document" is for the stored corpus).
     For sentence-transformers, *model* defaults to SENTENCE_TRANSFORMER_MODEL.
+    input_type is ignored by the OpenAI and sentence-transformers backends.
     """
     backend = resolve_embedding_backend()
-    if backend == "sentence_transformers":
-        return _embed_texts_sentence_transformers(texts, model_name=model)
+    # if backend == "sentence_transformers":
+    #     return _embed_texts_sentence_transformers(texts, model_name=model)
+    if backend == "voyage":
+        return _embed_texts_voyage(texts, model or VOYAGE_EMBEDDING_MODEL, input_type=input_type)
     openai_model = model or EMBEDDING_MODEL
     return _embed_texts_openai(texts, openai_model)
 
@@ -426,7 +573,10 @@ def embed_neighborhood_features(
     texts = build_all_profiles(df)
     backend = resolve_embedding_backend()
 
-    if backend == "openai":
+    if backend == "voyage":
+        embeddings = embed_texts(texts, input_type="document")
+        save_embeddings(embeddings, texts, backend="voyage")
+    elif backend == "openai":
         try:
             embeddings = embed_texts(texts)
         except Exception as e:
@@ -440,9 +590,9 @@ def embed_neighborhood_features(
                 return embeddings, texts
             raise
         save_embeddings(embeddings, texts, backend="openai")
-    else:
-        embeddings = _embed_texts_sentence_transformers(texts)
-        save_embeddings(embeddings, texts, backend="sentence_transformers")
+    # else:
+    #     embeddings = _embed_texts_sentence_transformers(texts)
+    #     save_embeddings(embeddings, texts, backend="sentence_transformers")
 
     return embeddings, texts
 

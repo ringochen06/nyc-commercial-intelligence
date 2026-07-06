@@ -407,7 +407,10 @@ def rank(req: RankRequest) -> RankResponse:
     filtered_indices = [idx_map[n] for n in keep_names]
     filtered_embeddings = all_embeddings[filtered_indices]
 
-    query_embedding = embed_texts([req.query])[0]
+    # Match the stored corpus's input_type="document" with input_type="query" on
+    # the search text (Voyage embeds the two asymmetrically). No-op for the OpenAI
+    # and sentence-transformers backends, which ignore input_type.
+    query_embedding = embed_texts([req.query], input_type="query")[0]
     sim_scores = cosine_similarity(query_embedding, filtered_embeddings)
 
     source = req.competitive_source or "__overall__"

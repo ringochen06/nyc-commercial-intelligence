@@ -1,9 +1,9 @@
 -- RPC for the Ranking page: take a query embedding plus an optional set of hard
 -- filters, and return rows ordered by cosine similarity. Doing the cosine math in
--- Postgres avoids shipping all 1536-dim vectors over the wire to the Vercel function.
+-- Postgres avoids shipping all 1024-dim vectors over the wire to the Vercel function.
 
 create or replace function public.match_neighborhoods(
-    query_embedding             vector(1536),
+    query_embedding             vector(1024),
     boroughs                    text[]            default null,
     min_subway_station_count    integer           default null,
     min_avg_pedestrian          double precision  default null,

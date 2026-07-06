@@ -20,6 +20,7 @@ from src.feature_engineering import load_boundaries  # noqa: E402
 SHAPE = REPO_ROOT / "data" / "raw" / "nyc_boundaries" / "nycdta2020.shp"
 OUT = REPO_ROOT / "data" / "processed" / "cdta_geo.json"
 
+# TODO: this is a bit of a hack to avoid adding geopandas as a dependency for the API. We could
 
 def main() -> None:
     if not SHAPE.is_file():

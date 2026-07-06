@@ -1,12 +1,12 @@
-"""One-shot loader: push neighborhood_features_final.csv + OpenAI embeddings into Supabase.
+"""One-shot loader: push neighborhood_features_final.csv + Voyage embeddings into Supabase.
 
-Reads the feature CSV, builds OpenAI text-embedding-3-small vectors, and
-upserts into ``public.neighborhoods`` using the service-role key.
+Reads the feature CSV, builds Voyage AI voyage-4 (1024-dim) document vectors,
+and upserts into ``public.neighborhoods`` using the service-role key.
 
 Required environment (in .env or shell):
     SUPABASE_URL                 e.g. https://<ref>.supabase.co
     SUPABASE_SERVICE_ROLE_KEY    server-only, bypasses RLS
-    OPENAI_API_KEY               for the embedding call
+    VOYAGE_API_KEY               for the embedding call
 
 Optional:
     EMBEDDINGS_FORCE=1           rebuild embeddings even if outputs/embeddings/ has a cache
@@ -129,8 +129,12 @@ def main() -> None:
         raise SystemExit(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the environment."
         )
-    if not os.getenv("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY must be set (for the embedding call).")
+    if not os.getenv("VOYAGE_API_KEY"):
+        raise SystemExit("VOYAGE_API_KEY must be set (for the embedding call).")
+
+    # Pin the backend so the loader is independent of any ambient EMBEDDING_BACKEND
+    # in .env — the schema is vector(1024), which only the voyage backend produces.
+    os.environ["EMBEDDING_BACKEND"] = "voyage"
 
     if not CSV_PATH.is_file():
         raise SystemExit(f"feature CSV missing: {CSV_PATH}")
@@ -141,20 +145,20 @@ def main() -> None:
     texts = build_all_profiles(df)
 
     # Either reuse a cached embedding matrix or compute fresh.
-    cached = None if os.getenv("EMBEDDINGS_FORCE") else load_embeddings(backend="openai")
+    cached = None if os.getenv("EMBEDDINGS_FORCE") else load_embeddings(backend="voyage")
     if cached is not None and cached[0].shape[0] == len(df):
         emb, _ = cached
         print(f"using cached embeddings: shape {emb.shape}")
     else:
-        print("calling OpenAI text-embedding-3-small for all rows...")
-        emb = embed_texts(texts)
-        save_embeddings(emb, texts, backend="openai")
+        print("calling Voyage voyage-4 (input_type=document) for all rows...")
+        emb = embed_texts(texts, input_type="document")
+        save_embeddings(emb, texts, backend="voyage")
         print(f"saved cache: shape {emb.shape}")
 
-    if emb.shape[1] != 1536:
+    if emb.shape[1] != 1024:
         raise SystemExit(
-            f"embedding dim {emb.shape[1]} != 1536 (the schema's vector(1536)). "
-            "Recreate the schema with the right dim or use OpenAI text-embedding-3-small."
+            f"embedding dim {emb.shape[1]} != 1024 (the schema's vector(1024)). "
+            "Recreate the schema with the right dim or use Voyage voyage-4 (1024-dim)."
         )
 
     # Build the row payload.

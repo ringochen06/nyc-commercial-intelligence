@@ -1,7 +1,7 @@
 -- Master neighborhood feature table.
 -- One row per CDTA (Community District Tabulation Area), mirroring
--- data/processed/neighborhood_features_final.csv plus an OpenAI
--- text-embedding-3-small (1536-dim) vector built from the row's text profile.
+-- data/processed/neighborhood_features_final.csv plus a Voyage AI
+-- voyage-4 (1024-dim) vector built from the row's text profile.
 
 create table public.neighborhoods (
     neighborhood                                text primary key,
@@ -87,7 +87,7 @@ create table public.neighborhoods (
     commercial_activity_score                   double precision,
     transit_activity_score                      double precision,
 
-    embedding                                   vector(1536),
+    embedding                                   vector(1024),
     embedding_text                              text,
 
     pipeline_loaded_at                          timestamptz not null default now()
@@ -98,10 +98,10 @@ create table public.neighborhoods (
 -- maps the lowercase ("act_other") variant to *_lower_storefront / *_lower_density.
 
 comment on table public.neighborhoods is
-    'One row per NYC CDTA. Source: data/processed/neighborhood_features_final.csv plus OpenAI embeddings of the row text profile.';
+    'One row per NYC CDTA. Source: data/processed/neighborhood_features_final.csv plus Voyage AI voyage-4 embeddings of the row text profile.';
 comment on column public.neighborhoods.cd is
     'CDTA 2020 code (e.g. MN01). Joins to nycdta2020 GeoJSON used for the choropleth.';
 comment on column public.neighborhoods.embedding is
-    'OpenAI text-embedding-3-small vector of embedding_text. Cosine distance via the <=> operator.';
+    'Voyage AI voyage-4 vector of embedding_text. Cosine distance via the <=> operator.';
 comment on column public.neighborhoods.embedding_text is
     'Exact text profile used to produce embedding. Stored so we can rebuild vectors deterministically.';

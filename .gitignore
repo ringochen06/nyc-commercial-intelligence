@@ -20,8 +20,7 @@ data/raw/**
 !data/raw/nyc_boundaries/nycdta2020.*
 
 # Generated outputs (embeddings, cluster HDF5 cache, validation plots, models) — regenerate locally.
-outputs/**
-!outputs/**/
+
 claude.md
 
 # Stray cluster cache if dev ran Streamlit with cwd under tests/
